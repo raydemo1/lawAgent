@@ -1,5 +1,7 @@
 # Local preview / brainstorming sessions
 .superpowers/
+.agents/
+.codex/
 
 # Environment and secrets
 .env

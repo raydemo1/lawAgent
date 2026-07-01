@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LawAgent Source Manifest",
+  "type": "object",
+  "required": [
+    "source_id",
+    "title",
+    "source_url",
+    "source_site",
+    "doc_type"
+  ],
+  "properties": {
+    "source_id": { "type": "string" },
+    "title": { "type": "string" },
+    "source_url": { "type": "string" },
+    "download_url": { "type": ["string", "null"] },
+    "source_site": { "type": "string" },
+    "doc_type": {
+      "type": "string",
+      "enum": ["law", "regulation", "policy", "faq", "guideline", "privacy_policy", "internal_policy"]
+    },
+    "authority": { "type": "string" },
+    "law_status": { "type": "string" },
+    "publish_date": { "type": ["string", "null"] },
+    "effective_date": { "type": ["string", "null"] },
+    "topic_tags": { "type": ["string", "array"] },
+    "language": { "type": "string", "enum": ["zh", "en", "mixed"] },
+    "file_format": { "type": "string" },
+    "include_in_mvp": { "type": ["boolean", "string"] },
+    "review_note": { "type": ["string", "null"] }
+  }
+}
+
