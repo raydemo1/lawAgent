@@ -14,6 +14,8 @@ DocType = Literal[
     "guideline",
     "privacy_policy",
     "internal_policy",
+    "case",
+    "contract",
 ]
 
 Authority = Literal[
@@ -29,6 +31,13 @@ Authority = Literal[
 ]
 
 LawStatus = Literal["effective", "not_yet_effective", "amended", "repealed", "unknown"]
+ClauseCitationRole = Literal[
+    "primary_legal_basis",
+    "conditional_local_basis",
+    "implementation_reference",
+    "interpretation_auxiliary",
+    "version_archive",
+]
 
 
 def _split_list(value: Any) -> list[str]:
@@ -74,15 +83,30 @@ class SourceRecord(StrictModel):
     law_status: LawStatus = "unknown"
     publish_date: str | None = None
     effective_date: str | None = None
+    issuing_body: str | None = None
+    applicable_region: str = "CN"
+    legal_domain: list[str] = Field(default_factory=list)
+    applicable_subjects: list[str] = Field(default_factory=list)
+    case_no: str | None = None
+    court: str | None = None
+    trial_instance: str | None = None
+    contract_parties: list[str] = Field(default_factory=list)
+    clause_type: str | None = None
     topic_tags: list[str] = Field(default_factory=list)
     language: Literal["zh", "en", "mixed"] = "zh"
     file_format: str = "html"
     include_in_mvp: bool = False
     review_note: str | None = None
 
-    @field_validator("topic_tags", mode="before")
+    @field_validator(
+        "topic_tags",
+        "legal_domain",
+        "applicable_subjects",
+        "contract_parties",
+        mode="before",
+    )
     @classmethod
-    def parse_topic_tags(cls, value: Any) -> list[str]:
+    def parse_string_lists(cls, value: Any) -> list[str]:
         return _split_list(value)
 
     @field_validator("include_in_mvp", mode="before")
@@ -129,8 +153,16 @@ class Document(StrictModel):
     law_status: LawStatus = "unknown"
     publish_date: str | None = None
     effective_date: str | None = None
+    issuing_body: str | None = None
     language: Literal["zh", "en", "mixed"] = "zh"
-    jurisdiction: str = "CN"
+    applicable_region: str = "CN"
+    legal_domain: list[str] = Field(default_factory=list)
+    applicable_subjects: list[str] = Field(default_factory=list)
+    case_no: str | None = None
+    court: str | None = None
+    trial_instance: str | None = None
+    contract_parties: list[str] = Field(default_factory=list)
+    clause_type: str | None = None
     topic_tags: list[str] = Field(default_factory=list)
     raw_format: str = "html"
     text: str
@@ -183,13 +215,30 @@ class Chunk(StrictModel):
     title: str
     text: str
     chunk_index: int
+    doc_type: DocType = "law"
     heading_path: list[str] = Field(default_factory=list)
     article_no: str | None = None
+    paragraph_no: str | None = None
+    item_no: str | None = None
+    citation_label: str | None = None
+    citation_role: ClauseCitationRole = "interpretation_auxiliary"
+    can_cite_clause: bool = False
     prev_chunk_id: str | None = None
     next_chunk_id: str | None = None
     authority: Authority = "unknown"
     law_status: LawStatus = "unknown"
+    publish_date: str | None = None
+    effective_date: str | None = None
     source_url: str
+    applicable_region: str = "CN"
+    issuing_body: str | None = None
+    legal_domain: list[str] = Field(default_factory=list)
+    applicable_subjects: list[str] = Field(default_factory=list)
+    case_no: str | None = None
+    court: str | None = None
+    trial_instance: str | None = None
+    contract_parties: list[str] = Field(default_factory=list)
+    clause_type: str | None = None
     topic_tags: list[str] = Field(default_factory=list)
     char_count: int
 
@@ -199,4 +248,3 @@ class Chunk(StrictModel):
         if value <= 0:
             raise ValueError("char_count must be positive")
         return value
-

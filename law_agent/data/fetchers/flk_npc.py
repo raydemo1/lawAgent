@@ -94,6 +94,14 @@ def _map_status(sxx: Any) -> LawStatus:
     return {3: "effective", 2: "amended", 1: "repealed"}.get(sxx, "unknown")
 
 
+def _extract_issuing_body(row: dict[str, Any]) -> str | None:
+    for key in ("zdjg", "zdjgName", "bbr", "gbr", "office"):
+        value = row.get(key)
+        if value:
+            return strip_html(str(value))
+    return None
+
+
 def bbbs_from_source_id(source_id: str) -> str:
     prefix = "flk_npc_"
     if not source_id.startswith(prefix):
@@ -162,6 +170,10 @@ def search_sources(
                 law_status=_map_status(row.get("sxx")),
                 publish_date=row.get("gbrq"),
                 effective_date=row.get("sxrq"),
+                issuing_body=_extract_issuing_body(row),
+                applicable_region="CN",
+                legal_domain=["数据合规"],
+                applicable_subjects=[],
                 topic_tags=[term, "数据合规"],
                 language="zh",
                 file_format="docx",

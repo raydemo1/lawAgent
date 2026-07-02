@@ -1,12 +1,20 @@
 import pytest
 
-from law_agent.data.fetchers.flk_npc import get_download_url, strip_html
+from law_agent.data.fetchers.flk_npc import _extract_issuing_body, get_download_url, strip_html
 from law_agent.data.fetchers.generic import fetch_source
 from law_agent.data.schemas import SourceRecord
 
 
 def test_strip_html_removes_flk_highlight_tags() -> None:
     assert strip_html("中华人民共和国<em class='highlight'>个人信息保护</em>法") == "中华人民共和国个人信息保护法"
+
+
+def test_flk_issuing_body_is_not_guessed_when_missing() -> None:
+    assert _extract_issuing_body({"flxz": "法律"}) is None
+
+
+def test_flk_issuing_body_uses_explicit_source_field() -> None:
+    assert _extract_issuing_body({"zdjgName": "国务院"}) == "国务院"
 
 
 def test_fetch_source_has_no_sample_fallback(tmp_path) -> None:

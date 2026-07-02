@@ -14,13 +14,17 @@ class RetrievalCase(BaseModel):
     question: str
     expected_doc_id: str
     expected_chunk_id: str
+    expected_heading_path: list[str]
+    expected_citation_label: str | None = None
     tags: list[str]
 
 
 def build_retrieval_cases(chunks: list[Chunk], limit: int = 60) -> list[RetrievalCase]:
     cases: list[RetrievalCase] = []
     for chunk in chunks:
-        if chunk.article_no:
+        if chunk.citation_label:
+            question = f"{chunk.citation_label}规定了什么？"
+        elif chunk.article_no:
             question = f"{chunk.title}{chunk.article_no}规定了什么？"
         else:
             question = f"{chunk.title}的核心内容是什么？"
@@ -30,6 +34,8 @@ def build_retrieval_cases(chunks: list[Chunk], limit: int = 60) -> list[Retrieva
                 question=question,
                 expected_doc_id=chunk.doc_id,
                 expected_chunk_id=chunk.chunk_id,
+                expected_heading_path=chunk.heading_path,
+                expected_citation_label=chunk.citation_label,
                 tags=chunk.topic_tags,
             )
         )

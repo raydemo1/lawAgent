@@ -86,11 +86,19 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 def _cmd_normalize(args: argparse.Namespace) -> int:
     manifest = read_manifest(Path(args.manifest))
     raw_dir = Path(args.raw_dir)
+    parser_output_dir = Path(args.parser_output_dir) if args.parser_output_dir else None
     documents: list[Document] = []
     for record in manifest:
         if not record.include_in_mvp:
             continue
-        documents.append(normalize_source(record, _find_raw_path(raw_dir, record)))
+        documents.append(
+            normalize_source(
+                record,
+                _find_raw_path(raw_dir, record),
+                parser=args.parser,
+                parser_output_dir=parser_output_dir,
+            )
+        )
     count = write_jsonl(Path(args.output), documents)
     print(f"Wrote {count} normalized documents to {args.output}")
     return 0
@@ -160,7 +168,13 @@ def _cmd_pipeline_run(args: argparse.Namespace) -> int:
         )
     )
     _cmd_normalize(
-        argparse.Namespace(manifest=str(manifest_path), raw_dir=str(raw_dir), output=str(normalized_path))
+        argparse.Namespace(
+            manifest=str(manifest_path),
+            raw_dir=str(raw_dir),
+            output=str(normalized_path),
+            parser=args.parser,
+            parser_output_dir=args.parser_output_dir,
+        )
     )
     _cmd_clean(argparse.Namespace(input=str(normalized_path), output=str(cleaned_path)))
     _cmd_enrich(argparse.Namespace(input=str(cleaned_path), output=str(enriched_path)))
@@ -244,6 +258,17 @@ def build_parser() -> argparse.ArgumentParser:
     normalize.add_argument("--manifest", default="data/manifests/source_manifest.csv")
     normalize.add_argument("--raw-dir", default="data/raw")
     normalize.add_argument("--output", default="data/normalized/documents.jsonl")
+    normalize.add_argument(
+        "--parser",
+        choices=["auto", "plain", "docx", "docling", "mineru"],
+        default="auto",
+        help="Document parser engine. auto keeps FLK DOCX lightweight and uses Docling for PDF/image files.",
+    )
+    normalize.add_argument(
+        "--parser-output-dir",
+        default=None,
+        help="Directory for parser artifacts such as MinerU markdown output.",
+    )
     normalize.set_defaults(func=_cmd_normalize)
 
     enrich = subparsers.add_parser("enrich", help="Generate semantic enrichment")
@@ -287,6 +312,17 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_run.add_argument("--report-output", default="docs/data_governance_report.md")
     pipeline_run.add_argument("--timeout-seconds", type=int, default=30)
     pipeline_run.add_argument("--limit", type=int, default=60)
+    pipeline_run.add_argument(
+        "--parser",
+        choices=["auto", "plain", "docx", "docling", "mineru"],
+        default="auto",
+        help="Document parser engine passed to normalize.",
+    )
+    pipeline_run.add_argument(
+        "--parser-output-dir",
+        default=None,
+        help="Directory for parser artifacts such as MinerU markdown output.",
+    )
     pipeline_run.set_defaults(func=_cmd_pipeline_run)
 
     return parser

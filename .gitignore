@@ -3,6 +3,7 @@
 .agents/
 .codex/
 docs/
+data/
 
 # Environment and secrets
 .env

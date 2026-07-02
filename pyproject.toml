@@ -12,12 +12,26 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+docling = [
+  "docling>=2.0",
+  "onnxruntime>=1.18",
+]
+mineru = [
+  "mineru[all]>=3.0",
+]
+parsers = [
+  "docling>=2.0",
+  "onnxruntime>=1.18",
+  "mineru[all]>=3.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 
+[tool.setuptools.packages.find]
+include = ["law_agent*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-
