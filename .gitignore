@@ -2,6 +2,7 @@
 .superpowers/
 .agents/
 .codex/
+docs/
 
 # Environment and secrets
 .env
@@ -30,8 +31,14 @@ coverage/
 
 # Data and generated indexes
 data/raw/
+data/manifests/source_manifest.csv
+data/normalized/
+data/cleaned/
+data/enriched/
+data/chunks/
 data/processed/
 data/cache/
+data/eval/*.jsonl
 artifacts/
 indexes/
 *.sqlite
