@@ -1,4 +1,9 @@
-from law_agent.data.citation_policy import can_cite_clause, citation_role_for_source
+from law_agent.data.citation_policy import (
+    can_cite_clause,
+    citation_role_for_source,
+    default_retrievable_for_source,
+    frontend_direct_reference_for_source,
+)
 from law_agent.data.filters import filter_chunks, filter_clause_citable_chunks
 from law_agent.data.schemas import Chunk, SourceRecord
 
@@ -78,10 +83,21 @@ def test_citation_policy_marks_only_primary_sources_clause_citable() -> None:
         "implementation_reference"
     )
 
-    assert can_cite_clause("cac_data_export_assessment_guide_v2_2024") is False
-    assert citation_role_for_source("cac_data_export_assessment_guide_v2_2024") == (
-        "version_archive"
-    )
+    assert citation_role_for_source("missing_20260702_009") == "primary_legal_basis"
+    assert citation_role_for_source("missing_20260702_011") == "conditional_local_basis"
+    assert citation_role_for_source("missing_20260702_001") == "conditional_industry_basis"
+    assert citation_role_for_source("missing_20260702_002") == "conditional_industry_basis"
+    assert citation_role_for_source("missing_20260702_004") == "conditional_industry_basis"
+    assert citation_role_for_source("missing_20260702_012") == "conditional_industry_basis"
+    assert citation_role_for_source("missing_20260702_006") == "interpretation_auxiliary"
+
+
+def test_frontend_and_default_retrieval_policy_are_separate() -> None:
+    assert default_retrievable_for_source("missing_20260702_009") is True
+    assert frontend_direct_reference_for_source("missing_20260702_009") is True
+
+    assert default_retrievable_for_source("cac_cross_border_data_flow_rules_2024") is True
+    assert frontend_direct_reference_for_source("cac_cross_border_data_flow_rules_2024") is False
 
 
 def test_filter_clause_citable_chunks_only_returns_primary_effective_evidence() -> None:
@@ -112,17 +128,16 @@ def test_filter_clause_citable_chunks_only_returns_primary_effective_evidence() 
             "can_cite_clause": False,
         }
     )
-    old_version = primary.model_copy(
+    implementation_reference = primary.model_copy(
         update={
-            "chunk_id": "old:0000",
-            "source_id": "cac_data_export_assessment_guide_v2_2024",
-            "title": "数据出境安全评估申报指南（第二版）",
-            "citation_role": "version_archive",
+            "chunk_id": "implementation:0000",
+            "source_id": "tc260_gbt_35273_2020_pip_security_spec",
+            "title": "GB/T 35273-2020 信息安全技术 个人信息安全规范",
+            "citation_role": "implementation_reference",
             "can_cite_clause": False,
-            "law_status": "amended",
         }
     )
 
-    matched = filter_clause_citable_chunks([primary, qna, old_version])
+    matched = filter_clause_citable_chunks([primary, qna, implementation_reference])
 
     assert [chunk.chunk_id for chunk in matched] == ["primary:0000"]

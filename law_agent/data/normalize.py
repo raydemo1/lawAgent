@@ -75,18 +75,19 @@ def _read_text(
 def _docling_to_text(path: Path) -> ParsedText:
     try:
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
     except ImportError as exc:
         raise RuntimeError(
             "Docling parser requires optional dependency: "
             'install with `pip install -e ".[docling]"` or `uv pip install -U docling`.'
         ) from exc
-    artifacts_path = _docling_artifacts_path()
+    ocr_engine = _docling_ocr_engine()
+    artifacts_path = _docling_artifacts_path(ocr_engine=ocr_engine)
     pipeline_options = PdfPipelineOptions(
         artifacts_path=artifacts_path,
         do_ocr=True,
-        ocr_options=RapidOcrOptions(lang=["chinese", "english"], backend="onnxruntime"),
+        ocr_options=_docling_ocr_options(ocr_engine),
         do_table_structure=_docling_tableformer_available(artifacts_path),
     )
     converter = DocumentConverter(
@@ -100,10 +101,90 @@ def _docling_to_text(path: Path) -> ParsedText:
     )
 
 
-def _docling_artifacts_path() -> Path | None:
+def _docling_ocr_engine() -> str:
+    return os.environ.get("LAWAGENT_DOCLING_OCR_ENGINE", "rapidocr").strip().lower()
+
+
+def _docling_ocr_options(engine: str | None = None):
+    engine = engine or _docling_ocr_engine()
+    if engine in {"rapidocr", "rapid_ocr", ""}:
+        from docling.datamodel.pipeline_options import RapidOcrOptions
+
+        return RapidOcrOptions(lang=["chinese", "english"], backend="onnxruntime")
+    if engine in {"kserve", "kserve_v2", "kserve_v2_ocr", "api", "remote"}:
+        from docling.datamodel.pipeline_options import KserveV2OcrOptions
+
+        url = os.environ.get("LAWAGENT_DOCLING_OCR_API_URL", "").strip()
+        if not url:
+            raise RuntimeError(
+                "Docling remote OCR requires LAWAGENT_DOCLING_OCR_API_URL when "
+                "LAWAGENT_DOCLING_OCR_ENGINE=kserve_v2_ocr."
+            )
+        headers = _json_env_dict("LAWAGENT_DOCLING_OCR_HEADERS")
+        request_parameters = _json_env_dict("LAWAGENT_DOCLING_OCR_REQUEST_PARAMETERS")
+        return KserveV2OcrOptions(
+            url=url,
+            model_name=os.environ.get("LAWAGENT_DOCLING_OCR_MODEL_NAME", "ocr"),
+            model_version=os.environ.get("LAWAGENT_DOCLING_OCR_MODEL_VERSION") or None,
+            transport=os.environ.get("LAWAGENT_DOCLING_OCR_TRANSPORT", "http"),
+            headers=headers,
+            timeout=float(os.environ.get("LAWAGENT_DOCLING_OCR_TIMEOUT", "60")),
+            use_binary_data=_bool_env("LAWAGENT_DOCLING_OCR_USE_BINARY_DATA", True),
+            request_parameters=request_parameters,
+            lang=_csv_env("LAWAGENT_DOCLING_OCR_LANG", ["chinese", "english"]),
+        )
+    raise RuntimeError(f"Unsupported Docling OCR engine: {engine}")
+
+
+def _json_env_dict(name: str) -> dict[str, object]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return {}
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{name} must be a JSON object")
+    return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _csv_env(name: str, default: list[str]) -> list[str]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _docling_artifacts_path(ocr_engine: str = "rapidocr") -> Path | None:
     configured = os.environ.get("LAWAGENT_DOCLING_ARTIFACTS_PATH")
-    path = Path(configured) if configured else DEFAULT_DOCLING_ARTIFACTS_PATH
+    if configured is not None:
+        configured = configured.strip()
+        if not configured:
+            return None
+        path = Path(configured)
+        return path if path.exists() else None
+
+    path = DEFAULT_DOCLING_ARTIFACTS_PATH
+    if ocr_engine in {"rapidocr", "rapid_ocr", ""} and not _docling_rapidocr_available(path):
+        return None
     return path if path.exists() else None
+
+
+def _docling_rapidocr_available(artifacts_path: Path) -> bool:
+    rapidocr_root = artifacts_path / "RapidOcr"
+    required = [
+        rapidocr_root / "onnx" / "PP-OCRv4" / "det" / "ch_PP-OCRv4_det_mobile.onnx",
+        rapidocr_root / "onnx" / "PP-OCRv4" / "cls" / "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+        rapidocr_root / "onnx" / "PP-OCRv4" / "rec" / "ch_PP-OCRv4_rec_mobile.onnx",
+        rapidocr_root / "paddle" / "PP-OCRv4" / "rec" / "ch_PP-OCRv4_rec_mobile" / "ppocr_keys_v1.txt",
+        rapidocr_root / "resources" / "fonts" / "FZYTK.TTF",
+    ]
+    return all(path.exists() for path in required)
 
 
 def _docling_tableformer_available(artifacts_path: Path | None) -> bool:

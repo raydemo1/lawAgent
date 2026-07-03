@@ -63,7 +63,7 @@ FLK 采集链路使用国家法律法规数据库官方接口：
 
 ## 文档解析器
 
-默认 `auto` 解析策略保持第一阶段轻量：FLK 法规 DOCX 继续使用标准库解析，HTML/JSON/文本走内置规则；PDF 和图片类文档会转给 Docling。用户上传扫描版 PDF、复杂版式 PDF 时，可以显式切到 MinerU。
+默认 `auto` 解析策略保持第一阶段轻量：FLK 法规 DOCX 继续使用标准库解析，HTML/JSON/文本走内置规则；PDF 和图片类文档会转给 Docling。Docling 默认在 OCR 阶段使用本地 RapidOCR + ONNXRuntime；如果需要把 OCR 放到远程 PaddleOCR 服务，可接 KServe v2-compatible OCR API。用户上传扫描版 PDF、复杂版式 PDF 时，也可以显式切到 MinerU。
 
 ```powershell
 python -m law_agent.data normalize --parser auto
@@ -76,15 +76,32 @@ Docling 和 MinerU 是可选重依赖，按需要安装：
 ```powershell
 pip install -e ".[docling]"
 pip install -e ".[mineru]"
-# 或一次安装两者
+# 或一次安装全部解析器
 pip install -e ".[parsers]"
+```
+
+如果本地 `artifacts/models/docling` 目录缺 RapidOCR 模型，流水线会让 Docling 回到默认模型缓存，避免卡在残缺目录上。要强制使用某个完整模型目录，可以设置：
+
+```powershell
+$env:LAWAGENT_DOCLING_ARTIFACTS_PATH="artifacts/models/docling"
+```
+
+远程 OCR API 需要兼容 Docling 的 KServe v2 OCR 输入输出：输入包含 `image` 和 `lang_type`，输出包含 `boxes`、`txts`、`scores`。配置示例：
+
+```powershell
+$env:LAWAGENT_DOCLING_OCR_ENGINE="kserve_v2_ocr"
+$env:LAWAGENT_DOCLING_OCR_API_URL="http://127.0.0.1:8000"
+$env:LAWAGENT_DOCLING_OCR_MODEL_NAME="ocr"
+$env:LAWAGENT_DOCLING_OCR_TRANSPORT="http"
+python -m law_agent.data normalize --parser docling
 ```
 
 取舍原则：
 
 1. 纯文本法规、FLK DOCX：使用内置轻量 parser，速度快、依赖少。
 2. 普通 PDF、Word、表格和版面结构：优先 Docling，便于导出 Markdown 并保留结构。
-3. 扫描版/复杂 PDF：使用 MinerU pipeline，产出 Markdown 后再进入清洗、分块和检索链路。
+3. 扫描版/复杂 PDF：优先试 Docling；若版式结构仍不理想，再使用 MinerU pipeline，产出 Markdown 后进入清洗、分块和检索链路。
+4. 不在当前项目内直接加载 PaddleOCR 本地模型；如果要用 PaddleOCR，优先把它封装成远程 KServe v2-compatible OCR 服务，让 Docling 在 OCR 阶段调用。
 
 实现参考了 `ZongziForu/cn-law-hub` 对 FLK API 的公开整理，但当前仓库保留自己的数据治理 schema、清洗、语义增强、chunk 和 evalset 流水线。
 

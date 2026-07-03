@@ -34,9 +34,9 @@ LawStatus = Literal["effective", "not_yet_effective", "amended", "repealed", "un
 ClauseCitationRole = Literal[
     "primary_legal_basis",
     "conditional_local_basis",
+    "conditional_industry_basis",
     "implementation_reference",
     "interpretation_auxiliary",
-    "version_archive",
 ]
 
 
