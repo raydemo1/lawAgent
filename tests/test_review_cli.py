@@ -1,6 +1,6 @@
-"""CLI tests for the review run command (Issues 1-4)."""
-
 from pathlib import Path
+
+import pytest
 
 from law_agent.review.cli import main
 from law_agent.review.io import read_review_cases, read_review_results, read_retrieval_traces
@@ -11,34 +11,34 @@ from law_agent.review.service import create_review_case
 def test_create_review_case_writes_case_trace_and_result(tmp_path: Path) -> None:
     response = create_review_case(
         question="这个场景是否需要数据出境安全评估？",
-        material_text="手机号发送给新加坡服务商。",
+        material_text="我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
         output_dir=tmp_path,
-        now=lambda: "2026-07-01T00:00:00+00:00",
+        now=lambda: "2026-07-06T00:00:00+00:00",
         id_factory=lambda prefix: f"{prefix}_test",
     )
 
     assert response.review_case.review_case_id == "review_test"
     assert response.trace.trace_id == "trace_test"
     assert response.result.review_result_id == "result_test"
+    assert response.review_case.latest_result_id == "result_test"
+    assert response.result.risk_level == "insufficient_evidence"
+    assert response.trace.evidence_self_check.status == "not_checked"
 
-    cases = read_review_cases(tmp_path / "review_cases.jsonl")
-    results = read_review_results(tmp_path / "review_results.jsonl")
-    traces = read_retrieval_traces(tmp_path / "retrieval_traces.jsonl")
-
-    assert len(cases) == 1
-    assert len(results) == 1
-    assert len(traces) == 1
-    assert cases[0].review_case_id == "review_test"
-    assert traces[0].trace_id == "trace_test"
-    assert results[0].review_result_id == "result_test"
+    assert read_review_cases(response.case_path) == [response.review_case]
+    assert read_retrieval_traces(response.trace_path) == [response.trace]
+    assert read_review_results(response.result_path) == [response.result]
 
 
-def test_review_cli_help_exits_successfully() -> None:
-    exit_code = main(["--help"])
-    assert exit_code == 0
+def test_review_cli_help_exits_successfully(capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert "python -m law_agent.review" in captured.out
 
 
-def test_review_cli_run_material_text(tmp_path: Path) -> None:
+def test_review_cli_run_material_text(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
             "run",
@@ -51,40 +51,49 @@ def test_review_cli_run_material_text(tmp_path: Path) -> None:
         ]
     )
 
+    captured = capsys.readouterr()
     assert exit_code == 0
+    assert "Created review case review_" in captured.out
+    assert "Trace trace_" in captured.out
+    assert "Result result_" in captured.out
     assert (tmp_path / "review_cases.jsonl").exists()
     assert (tmp_path / "retrieval_traces.jsonl").exists()
     assert (tmp_path / "review_results.jsonl").exists()
 
 
-def test_review_cli_rejects_blank_question(tmp_path: Path) -> None:
+def test_review_cli_rejects_blank_question(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
             "run",
             "--question",
-            "   ",
+            " ",
             "--material-text",
-            "material",
+            "手机号发送给新加坡服务商。",
             "--output-dir",
             str(tmp_path),
         ]
     )
 
+    captured = capsys.readouterr()
     assert exit_code == 2
+    assert "question must not be blank" in captured.err
 
 
-def test_review_cli_requires_material_text(tmp_path: Path) -> None:
-    exit_code = main(
-        [
-            "run",
-            "--question",
-            "question",
-            "--output-dir",
-            str(tmp_path),
-        ]
-    )
+def test_review_cli_requires_material_text(tmp_path: Path, capsys) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "run",
+                "--question",
+                "这个场景是否需要数据出境安全评估？",
+                "--output-dir",
+                str(tmp_path),
+            ]
+        )
 
-    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "one of the arguments --material-text --material-file is required" in captured.err
 
 
 def test_review_cli_run_material_file(tmp_path: Path, capsys) -> None:

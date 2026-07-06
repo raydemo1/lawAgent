@@ -8,6 +8,7 @@ from pathlib import Path
 from law_agent.review.facts import FactsExtractor, extract_facts
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
+    read_retrieval_traces,
     review_cases_path,
     review_results_path,
     retrieval_traces_path,
@@ -17,6 +18,8 @@ from law_agent.review.io import (
 )
 from law_agent.review.materials import material_from_text
 from law_agent.review.query_planner import QueryPlanner, plan_queries
+from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, CorpusError, load_corpus
+from law_agent.review.retrieval.keyword import KeywordRetriever, merge_hits_by_chunk_id
 from law_agent.review.schemas import (
     EvidenceSelfCheck,
     MaterialRecord,
@@ -24,12 +27,14 @@ from law_agent.review.schemas import (
     ReviewFacts,
     ReviewResult,
     ReviewRunResponse,
+    RetrievalHit,
     RetrievalQuery,
     RetrievalTrace,
 )
 
 DEFAULT_REVIEW_RUNS_DIR = Path("artifacts/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
+DEFAULT_TOP_K = 10
 
 
 def _validate_non_blank(value: str, field_name: str) -> str:
@@ -114,3 +119,76 @@ def create_review_case(
         trace_path=trace_path,
         result_path=result_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue 5: keyword baseline retrieval
+# ---------------------------------------------------------------------------
+
+def run_keyword_retrieval(
+    *,
+    case_id: str,
+    chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
+    output_dir: Path = DEFAULT_REVIEW_RUNS_DIR,
+    top_k: int = DEFAULT_TOP_K,
+) -> RetrievalTrace:
+    """Run keyword retrieval for an existing review case.
+
+    Loads the persisted ``RetrievalTrace`` for ``case_id``, runs the planned
+    queries against the corpus, merges hits, and writes the updated trace
+    back to JSONL. Returns the updated trace.
+
+    Raises ``ValueError`` when the case or trace cannot be found.
+    """
+
+    trace_path = retrieval_traces_path(output_dir)
+    if not trace_path.exists():
+        raise ValueError(
+            f"retrieval traces file does not exist: {trace_path}. "
+            "Create a review case first with create_review_case."
+        )
+
+    traces = read_retrieval_traces(trace_path)
+    target_trace: RetrievalTrace | None = None
+    for trace in traces:
+        if trace.review_case_id == case_id:
+            target_trace = trace
+            break
+
+    if target_trace is None:
+        raise ValueError(
+            f"review case {case_id} not found in {trace_path}"
+        )
+
+    if not target_trace.queries:
+        raise ValueError(
+            f"review case {case_id} has no planned queries; "
+            "ensure create_review_case ran fact extraction and query planning."
+        )
+
+    chunks = load_corpus(chunks_path)
+    retriever = KeywordRetriever(chunks)
+
+    hits_per_query: list[list[RetrievalHit]] = []
+    for query in target_trace.queries:
+        hits = retriever.search(
+            query.text,
+            top_k=top_k,
+            query_type=query.query_type,
+        )
+        hits_per_query.append(hits)
+
+    merged_hits = merge_hits_by_chunk_id(hits_per_query, top_k=top_k)
+
+    updated_trace = target_trace.model_copy(
+        update={"keyword_results": merged_hits}
+    )
+
+    # Rewrite the traces file with the updated trace
+    updated_traces = [
+        updated_trace if t.trace_id == target_trace.trace_id else t
+        for t in traces
+    ]
+    write_retrieval_traces(trace_path, updated_traces)
+
+    return updated_trace

@@ -1,4 +1,4 @@
-"""Command-line interface for material-driven review."""
+"""Argparse CLI for material-driven review runs."""
 
 from __future__ import annotations
 
@@ -7,16 +7,17 @@ import sys
 from pathlib import Path
 
 from law_agent.review.materials import material_from_file, material_from_text
-from law_agent.review.service import DEFAULT_REVIEW_RUNS_DIR, create_review_case
+from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
+from law_agent.review.service import DEFAULT_REVIEW_RUNS_DIR, create_review_case, run_keyword_retrieval
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    if args.material_text is not None:
-        material = material_from_text(args.material_text)
-    else:
-        material = material_from_file(Path(args.material_file), parser=args.parser)
-
     try:
+        material = (
+            material_from_text(args.material_text)
+            if args.material_text is not None
+            else material_from_file(Path(args.material_file), parser=args.parser)
+        )
         response = create_review_case(
             question=args.question,
             material=material,
@@ -48,6 +49,30 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_retrieve(args: argparse.Namespace) -> int:
+    try:
+        trace = run_keyword_retrieval(
+            case_id=args.case_id,
+            chunks_path=Path(args.chunks),
+            output_dir=Path(args.output_dir),
+            top_k=args.top_k,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Retrieved evidence for case {trace.review_case_id}")
+    print(f"Trace {trace.trace_id}")
+    print(f"Keyword hits: {len(trace.keyword_results)}")
+    for hit in trace.keyword_results:
+        print(
+            f"  [{hit.rank + 1}] score={hit.score:.4f} role={hit.citation_role} "
+            f"can_cite={hit.can_cite_clause} type={hit.matched_query_type}"
+        )
+        print(f"      {hit.title[:60]}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m law_agent.review")
     subparsers = parser.add_subparsers(dest="command")
@@ -66,13 +91,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", default=str(DEFAULT_REVIEW_RUNS_DIR))
     run.set_defaults(func=_cmd_run)
 
+    retrieve = subparsers.add_parser(
+        "retrieve", help="Run keyword baseline retrieval for an existing review case"
+    )
+    retrieve.add_argument("--case-id", required=True)
+    retrieve.add_argument(
+        "--chunks",
+        default=str(DEFAULT_CHUNKS_PATH),
+        help="Path to chunks.jsonl corpus file",
+    )
+    retrieve.add_argument("--output-dir", default=str(DEFAULT_REVIEW_RUNS_DIR))
+    retrieve.add_argument("--top-k", type=int, default=10)
+    retrieve.set_defaults(func=_cmd_retrieve)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if not args.command:
-        parser.print_help(sys.stderr)
-        return 2
+    if not hasattr(args, "func"):
+        parser.print_help()
+        return 0
     return args.func(args)

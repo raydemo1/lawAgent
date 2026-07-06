@@ -91,6 +91,7 @@ class RetrievalHit(StrictModel):
     citation_role: ClauseCitationRole
     can_cite_clause: bool
     source_url: str
+    matched_query_type: RetrievalQueryType | None = None
 
 
 class EvidenceSelfCheck(StrictModel):

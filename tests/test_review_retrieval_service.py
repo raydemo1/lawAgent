@@ -1,0 +1,143 @@
+"""Integration tests for keyword retrieval service (Issue 5)."""
+
+from pathlib import Path
+
+from law_agent.data.io import write_jsonl
+from law_agent.data.schemas import Chunk
+from law_agent.review.io import read_retrieval_traces
+from law_agent.review.service import create_review_case, run_keyword_retrieval
+
+from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
+
+
+def _write_fixture_corpus(tmp_path: Path) -> Path:
+    chunks_path = tmp_path / "chunks.jsonl"
+    write_jsonl(chunks_path, FIXTURE_CHUNKS)
+    return chunks_path
+
+
+def test_run_keyword_retrieval_writes_hits_to_trace(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    response = create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    trace = run_keyword_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+    )
+
+    assert len(trace.keyword_results) > 0
+    assert all(h.retriever == "keyword" for h in trace.keyword_results)
+    assert all(h.score > 0 for h in trace.keyword_results)
+    assert [h.rank for h in trace.keyword_results] == list(range(len(trace.keyword_results)))
+
+
+def test_run_keyword_retrieval_persists_to_jsonl(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    create_review_case(
+        question="数据出境安全评估申报条件",
+        material_text="手机号发送给新加坡服务商。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    run_keyword_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+    )
+
+    traces = read_retrieval_traces(tmp_path / "retrieval_traces.jsonl")
+    assert len(traces) == 1
+    assert len(traces[0].keyword_results) > 0
+    assert traces[0].queries  # original queries preserved
+
+
+def test_run_keyword_retrieval_preserves_queries_and_evidence_check(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    response = create_review_case(
+        question="数据出境安全评估",
+        material_text="手机号发送给新加坡服务商。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+    original_queries = response.trace.queries
+
+    trace = run_keyword_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+    )
+
+    assert trace.queries == original_queries
+    assert trace.evidence_self_check.status == "not_checked"
+    assert trace.vector_results == []
+    assert trace.hybrid_results == []
+
+
+def test_run_keyword_retrieval_data_export_query_finds_assessment_chunk(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    trace = run_keyword_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+    )
+
+    chunk_ids = [h.chunk_id for h in trace.keyword_results]
+    assert "chunk_assessment" in chunk_ids
+
+
+def test_run_keyword_retrieval_unknown_case_raises(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    create_review_case(
+        question="问题",
+        material_text="材料",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="not found"):
+        run_keyword_retrieval(
+            case_id="review_unknown",
+            chunks_path=chunks_path,
+            output_dir=tmp_path,
+        )
+
+
+def test_run_keyword_retrieval_no_traces_file_raises(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="does not exist"):
+        run_keyword_retrieval(
+            case_id="review_test",
+            chunks_path=chunks_path,
+            output_dir=tmp_path,
+        )
