@@ -9,8 +9,8 @@ from html import unescape
 from law_agent.data.citation_policy import can_cite_clause, citation_role_for_source
 from law_agent.data.schemas import Chunk, Document
 
-GENERIC_HARD_LIMIT_CHARS = 1200
-GENERIC_SOFT_LIMIT_CHARS = 900
+GENERIC_HARD_LIMIT_CHARS = 650
+GENERIC_SOFT_LIMIT_CHARS = 480
 MIN_GENERIC_CHUNK_CHARS = 120
 
 MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")

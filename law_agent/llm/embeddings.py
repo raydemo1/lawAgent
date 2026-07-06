@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -58,25 +59,40 @@ class OpenAICompatibleEmbeddings(EmbeddingsProvider):
         if not self.config.api_key:
             raise RuntimeError("EMBEDDING_API_KEY is not configured")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self._endpoint,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.config.timeout_seconds
-            ) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"embedding request failed with HTTP {exc.code}: {detail}"
-            ) from exc
+
+        max_retries = 4
+        for attempt in range(max_retries):
+            request = urllib.request.Request(
+                self._endpoint,
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {self.config.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.config.timeout_seconds
+                ) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                # Retry on rate limit (429) and server errors (500+) only.
+                # 400 is a real parameter error (e.g. oversized input) and
+                # should surface immediately rather than waste retry budget.
+                retryable = exc.code == 429 or exc.code >= 500
+                if not retryable or attempt == max_retries - 1:
+                    raise RuntimeError(
+                        f"embedding request failed with HTTP {exc.code}: {detail}"
+                    ) from exc
+                backoff = min(2**attempt, 8)
+                time.sleep(backoff)
+            except urllib.error.URLError as exc:
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"embedding request failed: {exc}") from exc
+                time.sleep(min(2**attempt, 8))
+        raise RuntimeError("embedding request exhausted retries")
 
 
 class LocalSentenceTransformerEmbeddings(EmbeddingsProvider):

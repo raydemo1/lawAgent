@@ -32,7 +32,12 @@ from law_agent.review.retrieval.adapters import (
 )
 from law_agent.review.retrieval.indexing import chunk_index_document
 
-_EMBEDDING_BATCH_SIZE = 64
+_EMBEDDING_BATCH_SIZE = 16
+# bge-large-zh-v1.5 accepts at most 512 tokens. Chinese text with punctuation
+# and markdown averages ~1.5 tokens/char (not 1.5 chars/token as commonly
+# assumed), so 340 chars is a safe ceiling. Without truncation, SiliconCloud
+# rejects oversized inputs with HTTP 400 rather than silently truncating.
+_EMBEDDING_MAX_CHARS = 340
 
 
 # ---------------------------------------------------------------------------
@@ -451,16 +456,29 @@ def _embed_chunk_texts(
     chunks: Sequence[Chunk],
     embeddings: EmbeddingsProvider,
 ) -> dict[str, list[float]]:
-    """Embed each chunk's ``title + text`` in batches, keyed by chunk_id."""
+    """Embed each chunk's ``title + text`` in batches, keyed by chunk_id.
+
+    Paces requests with a small delay between batches to stay within the
+    embedding provider's rate limit (SiliconCloud free tier in particular).
+    """
+
+    import time
 
     vectors: dict[str, list[float]] = {}
     batch: list[tuple[str, str]] = []
-    for chunk in chunks:
+    for batch_no, chunk in enumerate(chunks):
         text = f"{chunk.title}\n{chunk.text}" if chunk.title else chunk.text
+        # Truncate to the model's token ceiling to avoid HTTP 400 from
+        # embedding providers that reject (rather than truncate) oversized
+        # inputs (e.g. SiliconCloud hosting bge-large-zh-v1.5).
+        if len(text) > _EMBEDDING_MAX_CHARS:
+            text = text[:_EMBEDDING_MAX_CHARS]
         batch.append((chunk.chunk_id, text))
         if len(batch) >= _EMBEDDING_BATCH_SIZE:
             _flush_embedding_batch(batch, embeddings, vectors)
             batch = []
+            # Pacing: ~0.3s between batches to avoid transient 400/429.
+            time.sleep(0.3)
     if batch:
         _flush_embedding_batch(batch, embeddings, vectors)
     return vectors

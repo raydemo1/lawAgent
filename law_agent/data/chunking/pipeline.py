@@ -8,7 +8,7 @@ from law_agent.data.chunking.structured import chunk_structured_document
 from law_agent.data.schemas import Chunk, Document
 
 MIN_STANDALONE_CHUNK_CHARS = 20
-MAX_MERGED_CHUNK_CHARS = 1200
+MAX_MERGED_CHUNK_CHARS = 650
 
 
 def chunk_document(document: Document) -> list[Chunk]:
