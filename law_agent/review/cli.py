@@ -149,6 +149,34 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from law_agent.review.evalset.runner import format_summary_text, run_evaluation
+
+    try:
+        summary = run_evaluation(
+            chunks_path=Path(args.chunks),
+            top_k=args.top_k,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(format_summary_text(summary))
+
+    # Save summary JSON if output specified
+    if args.output:
+        import json
+
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            summary.model_dump_json(indent=2), encoding="utf-8"
+        )
+        print(f"\nSaved JSON summary to {output_path}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m law_agent.review")
     subparsers = parser.add_subparsers(dest="command")
@@ -184,6 +212,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run hybrid retrieval (keyword + vector_mock + RRF + neighbors)",
     )
     retrieve.set_defaults(func=_cmd_retrieve)
+
+    eval_parser = subparsers.add_parser(
+        "eval", help="Run evaluation suite on golden-set scenarios"
+    )
+    eval_parser.add_argument(
+        "--chunks",
+        default=str(DEFAULT_CHUNKS_PATH),
+        help="Path to chunks.jsonl corpus file",
+    )
+    eval_parser.add_argument("--top-k", type=int, default=10)
+    eval_parser.add_argument(
+        "--output",
+        default=None,
+        help="Save JSON summary to this file path",
+    )
+    eval_parser.set_defaults(func=_cmd_eval)
 
     return parser
 
