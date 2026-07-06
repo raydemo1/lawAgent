@@ -26,6 +26,14 @@ CitationUsage = Literal[
     "implementation_reference",
     "policy_explanation",
 ]
+EvidenceIssueType = Literal[
+    "no_primary_legal_basis",
+    "region_mismatch",
+    "industry_mismatch",
+    "only_auxiliary_evidence",
+    "cross_border_mismatch",
+    "critical_facts_missing",
+]
 
 
 class ReviewFacts(StrictModel):
@@ -94,12 +102,30 @@ class RetrievalHit(StrictModel):
     matched_query_type: RetrievalQueryType | None = None
 
 
+class EvidenceIssue(StrictModel):
+    """A specific evidence sufficiency issue detected during self-check."""
+
+    issue_type: EvidenceIssueType
+    description: str
+
+
+class SecondRetrievalPlan(StrictModel):
+    """Plan for one controlled second retrieval when evidence is weak."""
+
+    expanded_queries: list[RetrievalQuery] = Field(default_factory=list)
+    increased_top_k: int = 20
+    stronger_boost: bool = True
+    reason: str
+
+
 class EvidenceSelfCheck(StrictModel):
     """Evidence sufficiency state for a review trace."""
 
     status: EvidenceStatus
-    issues: list[str] = Field(default_factory=list)
+    issues: list[EvidenceIssue] = Field(default_factory=list)
+    triggered_reasons: list[str] = Field(default_factory=list)
     second_retrieval_triggered: bool = False
+    second_retrieval_plan: SecondRetrievalPlan | None = None
 
 
 class Citation(StrictModel):

@@ -83,7 +83,24 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
         print(f"Neighbor chunks: {len(trace.neighbor_chunks)}")
         if trace.metadata_boosts:
             print(f"Metadata boosts: {trace.metadata_boosts}")
-        hits = trace.hybrid_results
+
+        # Evidence self-check status
+        check = trace.evidence_self_check
+        print(f"Evidence self-check: {check.status}")
+        if check.triggered_reasons:
+            print(f"  Triggered reasons: {check.triggered_reasons}")
+        for issue in check.issues:
+            print(f"  [{issue.issue_type}] {issue.description}")
+        if check.second_retrieval_triggered:
+            print(f"  Second retrieval: triggered")
+            if trace.second_retrieval:
+                print(f"  Expanded queries: {len(trace.second_retrieval.get('expanded_queries', []))}")
+        elif check.second_retrieval_plan:
+            print(f"  Second retrieval: planned but not executed")
+
+        if trace.final_evidence:
+            print(f"Final evidence: {len(trace.final_evidence)} hits")
+        hits = trace.final_evidence or trace.hybrid_results
     else:
         hits = trace.keyword_results
 

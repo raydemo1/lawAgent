@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from law_agent.review.evidence import (
+    evaluate_after_second_retrieval,
+    run_self_check,
+)
 from law_agent.review.facts import FactsExtractor, extract_facts
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
@@ -311,15 +315,82 @@ def run_hybrid_retrieval(
     # Build boost summary for trace
     boosts_summary = compute_boosts_summary(facts, query_types)
 
-    updated_trace = target_trace.model_copy(
-        update={
-            "keyword_results": boosted_keyword,
-            "vector_results": boosted_vector,
-            "hybrid_results": hybrid_hits,
-            "neighbor_chunks": neighbor_hits,
-            "metadata_boosts": boosts_summary,
+    # Issue 7: Evidence self-check
+    self_check = run_self_check(hybrid_hits, facts, chunks_by_id)
+    second_retrieval_info: dict[str, object] = {}
+    final_evidence: list[RetrievalHit] = hybrid_hits
+
+    if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
+        plan = self_check.second_retrieval_plan
+        expanded_top_k = plan.increased_top_k
+
+        # Run second retrieval with expanded queries
+        all_queries = list(target_trace.queries) + plan.expanded_queries
+        kw2_per_query: list[list[RetrievalHit]] = []
+        vec2_per_query: list[list[RetrievalHit]] = []
+        for q in all_queries:
+            kw2_per_query.append(
+                keyword_retriever.search(q.text, top_k=expanded_top_k, query_type=q.query_type)
+            )
+            vec2_per_query.append(
+                vector_retriever.search(q.text, top_k=expanded_top_k, query_type=q.query_type)
+            )
+
+        merged_kw2 = merge_hits_by_chunk_id(kw2_per_query, top_k=expanded_top_k)
+        merged_vec2 = merge_hits_by_chunk_id(vec2_per_query, top_k=expanded_top_k)
+
+        # Apply stronger boosts on second retrieval
+        boosted_kw2 = apply_boosts_to_hits(merged_kw2, chunks_by_id, facts)
+        boosted_vec2 = apply_boosts_to_hits(merged_vec2, chunks_by_id, facts)
+
+        hybrid2_hits = rrf_fuse(boosted_kw2, boosted_vec2, top_k=expanded_top_k)
+        neighbor2_hits = expand_neighbors(
+            hybrid2_hits[:5], chunks_by_id, max_neighbors=max_neighbors
+        )
+
+        # Re-evaluate after second retrieval (never triggers another)
+        self_check = evaluate_after_second_retrieval(
+            hybrid2_hits, facts, chunks_by_id, self_check.issues
+        )
+
+        # Use second retrieval results as final evidence
+        final_evidence = hybrid2_hits
+        second_retrieval_info = {
+            "triggered": True,
+            "expanded_queries": [q.model_dump() for q in plan.expanded_queries],
+            "increased_top_k": expanded_top_k,
+            "stronger_boost": plan.stronger_boost,
+            "reason": plan.reason,
+            "hybrid_results_count": len(hybrid2_hits),
+            "neighbor_chunks_count": len(neighbor2_hits),
         }
-    )
+
+        # Update trace with second retrieval results
+        updated_trace = target_trace.model_copy(
+            update={
+                "keyword_results": boosted_kw2,
+                "vector_results": boosted_vec2,
+                "hybrid_results": hybrid2_hits,
+                "neighbor_chunks": neighbor2_hits,
+                "metadata_boosts": boosts_summary,
+                "evidence_self_check": self_check,
+                "second_retrieval": second_retrieval_info,
+                "final_evidence": final_evidence,
+            }
+        )
+    else:
+        updated_trace = target_trace.model_copy(
+            update={
+                "keyword_results": boosted_keyword,
+                "vector_results": boosted_vector,
+                "hybrid_results": hybrid_hits,
+                "neighbor_chunks": neighbor_hits,
+                "metadata_boosts": boosts_summary,
+                "evidence_self_check": self_check,
+                "second_retrieval": second_retrieval_info,
+                "final_evidence": final_evidence,
+            }
+        )
 
     # Rewrite traces file
     updated_traces = [
