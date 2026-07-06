@@ -22,6 +22,7 @@ from law_agent.review.io import (
 )
 from law_agent.review.materials import material_from_text
 from law_agent.review.query_planner import QueryPlanner, plan_queries
+from law_agent.review.result_builder import build_review_result
 from law_agent.review.retrieval.boosts import (
     apply_boosts_to_hits,
     compute_boosts_summary,
@@ -398,5 +399,30 @@ def run_hybrid_retrieval(
         for t in traces
     ]
     write_retrieval_traces(retrieval_traces_path(output_dir), updated_traces)
+
+    # Issue 8: Build governed review result
+    review_result = build_review_result(
+        review_result_id=case.latest_result_id or id_factory("result"),
+        review_case_id=case_id,
+        trace_id=target_trace.trace_id,
+        facts=facts,
+        self_check=self_check,
+        evidence_hits=final_evidence,
+        chunks_by_id=chunks_by_id,
+    )
+
+    # Persist updated result
+    from law_agent.review.io import read_review_results
+
+    results_path = review_results_path(output_dir)
+    if results_path.exists():
+        existing_results = read_review_results(results_path)
+        updated_results = [
+            review_result if r.review_case_id == case_id else r
+            for r in existing_results
+        ]
+    else:
+        updated_results = [review_result]
+    write_review_results(results_path, updated_results)
 
     return updated_trace

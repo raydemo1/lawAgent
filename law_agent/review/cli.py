@@ -110,6 +110,42 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
             f"can_cite={hit.can_cite_clause} type={hit.matched_query_type}"
         )
         print(f"      {hit.title[:60]}")
+
+    # Issue 8: Display structured review result
+    if args.hybrid:
+        from law_agent.review.io import read_review_results
+
+        results_path = Path(args.output_dir) / "review_results.jsonl"
+        if results_path.exists():
+            results = read_review_results(results_path)
+            result = next(
+                (r for r in results if r.review_case_id == args.case_id), None
+            )
+            if result is not None:
+                print(f"\nReview Result: {result.review_result_id}")
+                print(f"  Risk level: {result.risk_level}")
+                print(f"  Conclusion: {result.conclusion[:120]}")
+                if result.trigger_reasons:
+                    print(f"  Trigger reasons: {result.trigger_reasons}")
+                if result.missing_information:
+                    print(f"  Missing information: {result.missing_information}")
+                if result.recommended_actions:
+                    print(f"  Recommended actions:")
+                    for action in result.recommended_actions:
+                        print(f"    - {action}")
+                if result.risk_boundaries:
+                    print(f"  Risk boundaries:")
+                    for boundary in result.risk_boundaries:
+                        print(f"    - {boundary}")
+                if result.applicable_evidence:
+                    print(f"  Applicable evidence:")
+                    for group in result.applicable_evidence:
+                        print(f"    [{group.usage}] ({len(group.citations)} citations)")
+                        if group.scope_note:
+                            print(f"      scope: {group.scope_note}")
+                        for cite in group.citations[:3]:
+                            label = f" - {cite.citation_label}" if cite.citation_label else ""
+                            print(f"      {cite.title[:50]}{label}")
     return 0
 
 

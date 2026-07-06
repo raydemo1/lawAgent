@@ -141,6 +141,14 @@ class Citation(StrictModel):
     citation_label: str | None = None
 
 
+class CitationGroup(StrictModel):
+    """A group of citations sharing the same usage category."""
+
+    usage: CitationUsage
+    citations: list[Citation] = Field(default_factory=list)
+    scope_note: str | None = None
+
+
 class ReviewResult(StrictModel):
     """Structured review result produced from facts and evidence."""
 
@@ -155,6 +163,7 @@ class ReviewResult(StrictModel):
     recommended_actions: list[str] = Field(default_factory=list)
     risk_boundaries: list[str] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    applicable_evidence: list[CitationGroup] = Field(default_factory=list)
 
 
 class ReviewCase(StrictModel):
