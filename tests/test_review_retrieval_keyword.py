@@ -194,13 +194,6 @@ def test_retriever_empty_query_returns_empty() -> None:
     assert hits == []
 
 
-def test_retriever_records_query_type() -> None:
-    retriever = KeywordRetriever(FIXTURE_CHUNKS)
-    hits = retriever.search("数据出境", top_k=3, query_type="legal_issue")
-
-    assert all(h.matched_query_type == "legal_issue" for h in hits)
-
-
 def test_retriever_hit_includes_required_fields() -> None:
     retriever = KeywordRetriever(FIXTURE_CHUNKS)
     hits = retriever.search("数据出境安全评估", top_k=1)

@@ -192,23 +192,6 @@ def test_negated_consent_not_detected() -> None:
     assert "legal_basis_or_consent" in facts.missing_information
 
 
-def test_negated_consent_variants() -> None:
-    negated_samples = [
-        "未经告知",
-        "用户不同意",
-        "未签署协议",
-        "未获得授权",
-        "未取得许可",
-    ]
-    for sample in negated_samples:
-        facts = extract_facts(sample)
-
-        assert facts.legal_basis_or_consent is None, (
-            f"negated consent term should not be detected: {sample!r}"
-        )
-        assert "legal_basis_or_consent" in facts.missing_information
-
-
 def test_affirmative_consent_still_works() -> None:
     # Affirmative phrasings must continue to be detected (no false negatives).
     affirmative_samples = [

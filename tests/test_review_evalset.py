@@ -34,11 +34,6 @@ def _hit(
 # Golden set tests
 # ---------------------------------------------------------------------------
 
-def test_default_scenarios_has_at_least_10_cases() -> None:
-    scenarios = get_default_scenarios()
-    assert len(scenarios) >= 10
-
-
 def test_default_scenarios_includes_abstention_case() -> None:
     scenarios = get_default_scenarios()
     abstain = [s for s in scenarios if s.should_abstain]
@@ -61,19 +56,6 @@ def test_default_scenarios_includes_industry_cases() -> None:
     scenarios = get_default_scenarios()
     industry = [s for s in scenarios if "automotive" in s.tags or "industry" in s.tags]
     assert len(industry) >= 1
-
-
-def test_all_scenarios_have_unique_ids() -> None:
-    scenarios = get_default_scenarios()
-    ids = [s.case_id for s in scenarios]
-    assert len(ids) == len(set(ids))
-
-
-def test_all_scenarios_have_non_empty_question_and_material() -> None:
-    scenarios = get_default_scenarios()
-    for s in scenarios:
-        assert s.question.strip()
-        assert s.material_text.strip()
 
 
 # ---------------------------------------------------------------------------

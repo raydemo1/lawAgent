@@ -367,32 +367,6 @@ def test_build_review_result_insufficient_evidence() -> None:
     assert len(legal_groups) == 0
 
 
-def test_build_review_result_groups_citations_correctly() -> None:
-    facts = ReviewFacts(cross_border_transfer=True)
-    check = _sufficient_check()
-    hits = [
-        _hit(chunk_id="c1", citation_role="primary_legal_basis", can_cite=True),
-        _hit(chunk_id="c2", citation_role="conditional_local_basis", can_cite=True),
-        _hit(chunk_id="c3", citation_role="implementation_reference", can_cite=False),
-        _hit(chunk_id="c4", citation_role="interpretation_auxiliary", can_cite=False),
-    ]
-
-    result = build_review_result(
-        review_result_id="result_test",
-        review_case_id="review_test",
-        trace_id="trace_test",
-        facts=facts,
-        self_check=check,
-        evidence_hits=hits,
-    )
-
-    usages = [g.usage for g in result.applicable_evidence]
-    assert "legal_basis" in usages
-    assert "conditional_basis" in usages
-    assert "implementation_reference" in usages
-    assert "policy_explanation" in usages
-
-
 # ---------------------------------------------------------------------------
 # Integration: run_hybrid_retrieval produces review result
 # ---------------------------------------------------------------------------

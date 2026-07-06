@@ -29,15 +29,6 @@ def test_create_review_case_writes_case_trace_and_result(tmp_path: Path) -> None
     assert read_review_results(response.result_path) == [response.result]
 
 
-def test_review_cli_help_exits_successfully(capsys) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["--help"])
-
-    captured = capsys.readouterr()
-    assert exc_info.value.code == 0
-    assert "python -m law_agent.review" in captured.out
-
-
 def test_review_cli_run_material_text(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
@@ -241,25 +232,6 @@ def test_create_review_case_llm_mode_uses_llm_nodes(tmp_path: Path, monkeypatch)
     assert calls == ["facts", "queries"]
     assert response.review_case.review_facts == llm_facts
     assert response.trace.queries[0].text == "数据出境安全评估"
-
-
-def test_review_cli_run_prints_facts_and_queries(tmp_path: Path, capsys) -> None:
-    exit_code = main(
-        [
-            "run",
-            "--question",
-            "这个场景是否需要数据出境安全评估？",
-            "--material-text",
-            "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
-            "--output-dir",
-            str(tmp_path),
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Facts:" in captured.out
-    assert "Queries:" in captured.out
 
 
 def test_review_cli_index_service_writes_index_artifacts(

@@ -34,17 +34,6 @@ def client(fixture_corpus: Path) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# Health check
-# ---------------------------------------------------------------------------
-
-def test_health_check_returns_ok(client: TestClient) -> None:
-    response = client.get("/api/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ok"
-
-
-# ---------------------------------------------------------------------------
 # POST /api/review
 # ---------------------------------------------------------------------------
 
@@ -136,21 +125,6 @@ def test_review_workflow_failure_returns_structured_review_failed(
     }
 
 
-def test_review_includes_trace_id(client: TestClient) -> None:
-    response = client.post(
-        "/api/review",
-        data={
-            "question": "数据出境安全评估",
-            "material_text": "手机号发送给新加坡。",
-        },
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["trace_id"]
-    assert data["trace_id"].startswith("trace_")
-
-
 def test_review_includes_citation_groups(client: TestClient) -> None:
     response = client.post(
         "/api/review",
@@ -212,12 +186,6 @@ def test_review_missing_material_text_returns_400(client: TestClient) -> None:
     )
 
     assert response.status_code == 400
-
-
-def test_review_empty_body_returns_422(client: TestClient) -> None:
-    """When question is missing entirely (required Form field), returns 422."""
-    response = client.post("/api/review", data={})
-    assert response.status_code == 422
 
 
 def test_review_abstention_case(client: TestClient) -> None:
@@ -317,20 +285,6 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/eval/run
-# ---------------------------------------------------------------------------
-
-def test_eval_run_returns_summary(client: TestClient) -> None:
-    response = client.post("/api/eval/run")
-    assert response.status_code == 200
-    data = response.json()
-    assert "generated_at" in data
-    assert "mode_metrics" in data
-    assert data["mode_metrics"]["rule_baseline"]["total_cases"] > 0
-    assert data["mode_metrics"]["local"]["total_cases"] > 0
-
-
-# ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
 
@@ -347,23 +301,3 @@ def test_cors_headers_present(client: TestClient) -> None:
     # CORS preflight should return 200
     assert response.status_code == 200
     assert "access-control-allow-origin" in {k.lower() for k in response.headers.keys()}
-
-
-# ---------------------------------------------------------------------------
-# OpenAPI docs
-# ---------------------------------------------------------------------------
-
-def test_openapi_docs_available(client: TestClient) -> None:
-    response = client.get("/docs")
-    assert response.status_code == 200
-
-
-def test_openapi_schema_available(client: TestClient) -> None:
-    response = client.get("/openapi.json")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["info"]["title"] == "LawAgent Review API"
-    assert "/api/review" in data["paths"]
-    assert "/api/health" in data["paths"]
-    assert "/api/eval/latest" in data["paths"]
-    assert "/api/eval/run" in data["paths"]

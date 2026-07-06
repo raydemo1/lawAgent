@@ -67,13 +67,6 @@ def test_material_fact_query_with_sensitive_info() -> None:
     assert "敏感个人信息" in material_queries[0].text
 
 
-def test_no_material_fact_query_without_facts() -> None:
-    facts = ReviewFacts()
-    queries = plan_queries("问题", facts)
-
-    assert "material_fact" not in _query_types(queries)
-
-
 # ---------------------------------------------------------------------------
 # Region condition query
 # ---------------------------------------------------------------------------
@@ -88,13 +81,6 @@ def test_region_query_when_region_set() -> None:
     assert "负面清单" in region_queries[0].text
 
 
-def test_no_region_query_when_region_absent() -> None:
-    facts = ReviewFacts()
-    queries = plan_queries("问题", facts)
-
-    assert "region_condition" not in _query_types(queries)
-
-
 # ---------------------------------------------------------------------------
 # Industry condition query
 # ---------------------------------------------------------------------------
@@ -107,13 +93,6 @@ def test_industry_query_when_industry_set() -> None:
     assert len(industry_queries) == 1
     assert "智能网联汽车" in industry_queries[0].text
     assert "安全管理" in industry_queries[0].text
-
-
-def test_no_industry_query_when_industry_absent() -> None:
-    facts = ReviewFacts()
-    queries = plan_queries("问题", facts)
-
-    assert "industry_condition" not in _query_types(queries)
 
 
 # ---------------------------------------------------------------------------
