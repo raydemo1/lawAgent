@@ -60,7 +60,14 @@ class CaseMetricResult(StrictModel):
 # Aggregated metrics
 # ---------------------------------------------------------------------------
 
-EvalMode = Literal["keyword", "hybrid"]
+EvalMode = Literal[
+    "keyword",
+    "hybrid",
+    "rule_baseline",
+    "local",
+    "service",
+    "llm",
+]
 
 
 class ModeMetrics(StrictModel):

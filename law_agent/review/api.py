@@ -18,23 +18,26 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from law_agent.review.evalset.runner import run_evaluation
 from law_agent.review.evalset.schemas import EvalSummary
 from law_agent.review.io import read_review_results, read_retrieval_traces
+from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
 from law_agent.review.schemas import (
     CitationGroup,
     EvidenceSelfCheck,
+    ReviewFailedResponse,
     ReviewFacts,
     ReviewResult,
 )
 from law_agent.review.service import (
     DEFAULT_REVIEW_RUNS_DIR,
+    ReviewMode,
     create_review_case,
     run_hybrid_retrieval,
 )
@@ -83,6 +86,7 @@ class EvalRunRequest(BaseModel):
 def create_app(
     *,
     chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
+    review_mode: ReviewMode = "rule_baseline",
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -108,6 +112,7 @@ def create_app(
 
     # Store config in app state
     app.state.chunks_path = Path(chunks_path)
+    app.state.review_mode = review_mode
     # Per-app eval cache so two app instances never share eval results.
     app.state.eval_cache: dict[str, EvalSummary | None] = {"latest": None}
 
@@ -123,14 +128,16 @@ def create_app(
 
     @app.post("/api/review", response_model=ReviewResponse)
     async def run_review(
-        question: str = Form(...),
+        request: Request,
+        question: str | None = Form(default=None),
         material_text: str = Form(default=""),
         file: UploadFile | None = File(default=None),
-    ) -> ReviewResponse:
+    ) -> ReviewResponse | JSONResponse:
         """Run a full review case: create case, hybrid retrieval, build result.
 
         Accepts either:
-        - ``material_text``: pasted text (JSON form field)
+        - JSON body: ``{"question": "...", "material_text": "..."}``
+        - form field: ``question`` + ``material_text``
         - ``file``: uploaded document file (.txt, .md, .pdf, .docx, .html, .json)
 
         When a file is provided, it is saved to the review run directory and
@@ -140,6 +147,25 @@ def create_app(
         Returns structured review result with facts, evidence self-check,
         citation groups, and trace IDs.
         """
+
+        if file is None and question is None and _is_json_request(request):
+            try:
+                payload = ReviewRequest.model_validate(await request.json())
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail=exc.errors())
+            question = payload.question
+            material_text = payload.material_text
+
+        if question is None:
+            raise HTTPException(
+                status_code=422,
+                detail=[{
+                    "type": "missing",
+                    "loc": ["body", "question"],
+                    "msg": "Field required",
+                    "input": None,
+                }],
+            )
 
         question = question.strip()
         if not question:
@@ -174,6 +200,7 @@ def create_app(
                         question=question,
                         material=material_record,
                         output_dir=tmp_path,
+                        review_mode=app.state.review_mode,
                     )
                 else:
                     # --- Pasted text mode ---
@@ -186,6 +213,7 @@ def create_app(
                         question=question,
                         material_text=material_text,
                         output_dir=tmp_path,
+                        review_mode=app.state.review_mode,
                     )
 
                 case_id = response.review_case.review_case_id
@@ -196,6 +224,7 @@ def create_app(
                     case_id=case_id,
                     chunks_path=app.state.chunks_path,
                     output_dir=tmp_path,
+                    review_mode=app.state.review_mode,
                 )
 
                 # Read the structured result
@@ -218,6 +247,9 @@ def create_app(
                 )
             except HTTPException:
                 raise
+            except ReviewWorkflowFailed as exc:
+                failed = ReviewFailedResponse.model_validate(exc.to_response())
+                return JSONResponse(status_code=200, content=failed.model_dump())
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             except Exception as exc:
@@ -266,6 +298,13 @@ def create_app(
         return JSONResponse(content=summary.model_dump())
 
     return app
+
+
+def _is_json_request(request: Request) -> bool:
+    """Return True when the request body is JSON."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    return "application/json" in content_type
 
 
 # ---------------------------------------------------------------------------

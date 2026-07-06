@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from law_agent.review.evidence import (
     evaluate_after_second_retrieval,
     run_self_check,
+    run_self_check_with_deepseek,
 )
-from law_agent.review.facts import FactsExtractor, extract_facts
+from law_agent.review.facts import FactsExtractor, extract_facts, extract_facts_with_deepseek
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
     read_retrieval_traces,
@@ -21,8 +23,8 @@ from law_agent.review.io import (
     write_retrieval_traces,
 )
 from law_agent.review.materials import material_from_text
-from law_agent.review.query_planner import QueryPlanner, plan_queries
-from law_agent.review.result_builder import build_review_result
+from law_agent.review.query_planner import QueryPlanner, plan_queries, plan_queries_with_deepseek
+from law_agent.review.result_builder import build_review_result, build_review_result_with_deepseek
 from law_agent.review.retrieval.boosts import (
     apply_boosts_to_hits,
     compute_boosts_summary,
@@ -47,6 +49,7 @@ from law_agent.review.schemas import (
 DEFAULT_REVIEW_RUNS_DIR = Path("artifacts/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
 DEFAULT_TOP_K = 10
+ReviewMode = Literal["rule_baseline", "llm"]
 
 
 def _validate_non_blank(value: str, field_name: str) -> str:
@@ -63,8 +66,9 @@ def create_review_case(
     output_dir: Path = DEFAULT_REVIEW_RUNS_DIR,
     now: Callable[[], str] = utc_now_iso,
     id_factory: Callable[[str], str] = make_id,
-    facts_extractor: FactsExtractor = extract_facts,
-    query_planner: QueryPlanner = plan_queries,
+    review_mode: ReviewMode = "rule_baseline",
+    facts_extractor: FactsExtractor | None = None,
+    query_planner: QueryPlanner | None = None,
 ) -> ReviewRunResponse:
     """Create and persist a review case with extracted facts and planned queries.
 
@@ -87,6 +91,15 @@ def create_review_case(
     review_case_id = id_factory("review")
     trace_id = id_factory("trace")
     review_result_id = id_factory("result")
+
+    if facts_extractor is None:
+        facts_extractor = (
+            extract_facts_with_deepseek if review_mode == "llm" else extract_facts
+        )
+    if query_planner is None:
+        query_planner = (
+            plan_queries_with_deepseek if review_mode == "llm" else plan_queries
+        )
 
     facts = facts_extractor(material.material_text, question)
     queries: list[RetrievalQuery] = query_planner(question, facts, material.material_text)
@@ -213,6 +226,143 @@ def run_keyword_retrieval(
 DEFAULT_NEIGHBOR_COUNT = 10
 
 
+def _diversify_hits_by_source(hits: list[RetrievalHit], *, top_k: int) -> list[RetrievalHit]:
+    """Prefer source diversity while preserving score order."""
+
+    selected: list[RetrievalHit] = []
+    seen_sources: set[str] = set()
+    for hit in hits:
+        if hit.source_id in seen_sources:
+            continue
+        seen_sources.add(hit.source_id)
+        selected.append(hit)
+        if len(selected) >= top_k:
+            break
+
+    if len(selected) < top_k:
+        selected_ids = {hit.chunk_id for hit in selected}
+        for hit in hits:
+            if hit.chunk_id in selected_ids:
+                continue
+            selected.append(hit)
+            if len(selected) >= top_k:
+                break
+
+    return [
+        hit.model_copy(update={"rank": rank, "retriever": "hybrid"})
+        for rank, hit in enumerate(selected)
+    ]
+
+
+def _dedup_hits_by_chunk(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    seen: set[str] = set()
+    deduped: list[RetrievalHit] = []
+    for hit in hits:
+        if hit.chunk_id in seen:
+            continue
+        seen.add(hit.chunk_id)
+        deduped.append(hit)
+    return deduped
+
+
+def _fact_priority_hits(
+    hits: list[RetrievalHit],
+    chunks_by_id: dict[str, object],
+    facts: ReviewFacts,
+) -> list[RetrievalHit]:
+    from law_agent.review.retrieval.boosts import _INDUSTRY_KEYWORD_MAP, _REGION_CODE_MAP
+
+    priority: list[RetrievalHit] = []
+    region_code = _REGION_CODE_MAP.get(facts.region or "", facts.region or "")
+    industry_keywords = _INDUSTRY_KEYWORD_MAP.get(facts.industry or "", [facts.industry or ""])
+    sensitive_terms = ["敏感个人信息", "人脸", "生物识别", "个人信息保护法"]
+
+    for hit in hits:
+        chunk = chunks_by_id.get(hit.chunk_id)
+        if chunk is None:
+            continue
+        chunk_region = getattr(chunk, "applicable_region", "")
+        chunk_tags = " ".join(getattr(chunk, "topic_tags", []))
+        chunk_subjects = " ".join(getattr(chunk, "applicable_subjects", []))
+        combined = f"{hit.title} {hit.text[:500]} {chunk_tags} {chunk_subjects}"
+
+        if facts.region and (chunk_region == region_code or chunk_region == facts.region):
+            priority.append(hit)
+            continue
+        if facts.industry and any(keyword and keyword in combined for keyword in industry_keywords):
+            priority.append(hit)
+            continue
+        if facts.sensitive_personal_info and any(term in combined for term in sensitive_terms):
+            priority.append(hit)
+            continue
+        if facts.cross_border_transfer and hit.citation_role == "primary_legal_basis":
+            if "数据出境" in combined or "跨境" in combined:
+                priority.append(hit)
+
+    return _dedup_hits_by_chunk(priority)
+
+
+def _corpus_fact_priority_hits(
+    chunks_by_id: dict[str, object],
+    facts: ReviewFacts,
+) -> list[RetrievalHit]:
+    from law_agent.review.retrieval.boosts import _INDUSTRY_KEYWORD_MAP, _REGION_CODE_MAP
+
+    hits: list[RetrievalHit] = []
+    region_code = _REGION_CODE_MAP.get(facts.region or "", facts.region or "")
+    industry_keywords = _INDUSTRY_KEYWORD_MAP.get(facts.industry or "", [facts.industry or ""])
+    sensitive_terms = ["敏感个人信息", "人脸", "生物识别", "个人信息保护法"]
+
+    for chunk in chunks_by_id.values():
+        chunk_id = getattr(chunk, "chunk_id")
+        chunk_region = getattr(chunk, "applicable_region", "")
+        chunk_tags = " ".join(getattr(chunk, "topic_tags", []))
+        chunk_subjects = " ".join(getattr(chunk, "applicable_subjects", []))
+        title = getattr(chunk, "title")
+        text = getattr(chunk, "text")
+        combined = f"{title} {text[:500]} {chunk_tags} {chunk_subjects}"
+        focused_metadata = f"{title} {chunk_tags} {chunk_subjects}"
+
+        priority_score = 0.0
+        if facts.region and (chunk_region == region_code or chunk_region == facts.region):
+            priority_score = 130.0
+        elif facts.industry and any(keyword and keyword in combined for keyword in industry_keywords):
+            priority_score = 125.0
+        elif (
+            facts.sensitive_personal_info
+            and not facts.cross_border_transfer
+            and any(term in focused_metadata for term in sensitive_terms)
+        ):
+            priority_score = 120.0
+
+        if priority_score == 0.0:
+            continue
+
+        hits.append(
+            RetrievalHit(
+                chunk_id=chunk_id,
+                doc_id=getattr(chunk, "doc_id"),
+                source_id=getattr(chunk, "source_id"),
+                title=title,
+                text=text,
+                score=priority_score,
+                rank=len(hits),
+                retriever="hybrid",
+                citation_role=getattr(chunk, "citation_role"),
+                can_cite_clause=getattr(chunk, "can_cite_clause"),
+                source_url=getattr(chunk, "source_url"),
+                matched_query_type=(
+                    "region_condition"
+                    if facts.region
+                    else "industry_condition" if facts.industry else "material_fact"
+                ),
+            )
+        )
+
+    hits = sorted(hits, key=lambda hit: (-hit.score, hit.source_id, hit.chunk_id))
+    return _dedup_hits_by_chunk(hits)
+
+
 def _load_case_and_trace(
     case_id: str,
     output_dir: Path,
@@ -265,6 +415,7 @@ def run_hybrid_retrieval(
     output_dir: Path = DEFAULT_REVIEW_RUNS_DIR,
     top_k: int = DEFAULT_TOP_K,
     max_neighbors: int = DEFAULT_NEIGHBOR_COUNT,
+    review_mode: ReviewMode = "rule_baseline",
 ) -> RetrievalTrace:
     """Run hybrid retrieval for an existing review case.
 
@@ -278,6 +429,7 @@ def run_hybrid_retrieval(
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
+    candidate_top_k = max(top_k, 100)
 
     keyword_retriever = KeywordRetriever(chunks)
     vector_retriever = VectorMockRetriever(chunks)
@@ -290,23 +442,32 @@ def run_hybrid_retrieval(
     for query in target_trace.queries:
         query_types.append(query.query_type)
         kw_hits = keyword_retriever.search(
-            query.text, top_k=top_k, query_type=query.query_type
+            query.text, top_k=candidate_top_k, query_type=query.query_type
         )
         vec_hits = vector_retriever.search(
-            query.text, top_k=top_k, query_type=query.query_type
+            query.text, top_k=candidate_top_k, query_type=query.query_type
         )
         keyword_hits_per_query.append(kw_hits)
         vector_hits_per_query.append(vec_hits)
 
-    merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=top_k)
-    merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=top_k)
+    merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=candidate_top_k)
+    merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=candidate_top_k)
 
     # Apply metadata boosts to both component results
     boosted_keyword = apply_boosts_to_hits(merged_keyword, chunks_by_id, facts)
     boosted_vector = apply_boosts_to_hits(merged_vector, chunks_by_id, facts)
 
     # RRF fusion
-    hybrid_hits = rrf_fuse(boosted_keyword, boosted_vector, top_k=top_k)
+    hybrid_candidates = rrf_fuse(boosted_keyword, boosted_vector, top_k=candidate_top_k)
+    priority_hits = _corpus_fact_priority_hits(chunks_by_id, facts) + _fact_priority_hits(
+        boosted_keyword + boosted_vector,
+        chunks_by_id,
+        facts,
+    )
+    hybrid_candidates = _dedup_hits_by_chunk(
+        priority_hits + hybrid_candidates + boosted_keyword + boosted_vector
+    )
+    hybrid_hits = _diversify_hits_by_source(hybrid_candidates, top_k=top_k)
 
     # Expand neighbors for top hits
     neighbor_hits = expand_neighbors(
@@ -317,13 +478,17 @@ def run_hybrid_retrieval(
     boosts_summary = compute_boosts_summary(facts, query_types)
 
     # Issue 7: Evidence self-check
-    self_check = run_self_check(hybrid_hits, facts, chunks_by_id)
+    self_check = (
+        run_self_check_with_deepseek(hybrid_hits, facts, chunks_by_id)
+        if review_mode == "llm"
+        else run_self_check(hybrid_hits, facts, chunks_by_id)
+    )
     second_retrieval_info: dict[str, object] = {}
     final_evidence: list[RetrievalHit] = hybrid_hits
 
     if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
         plan = self_check.second_retrieval_plan
-        expanded_top_k = plan.increased_top_k
+        expanded_top_k = max(plan.increased_top_k, candidate_top_k)
 
         # Run second retrieval with expanded queries
         all_queries = list(target_trace.queries) + plan.expanded_queries
@@ -344,15 +509,29 @@ def run_hybrid_retrieval(
         boosted_kw2 = apply_boosts_to_hits(merged_kw2, chunks_by_id, facts)
         boosted_vec2 = apply_boosts_to_hits(merged_vec2, chunks_by_id, facts)
 
-        hybrid2_hits = rrf_fuse(boosted_kw2, boosted_vec2, top_k=expanded_top_k)
+        hybrid2_candidates = rrf_fuse(boosted_kw2, boosted_vec2, top_k=expanded_top_k)
+        priority2_hits = _corpus_fact_priority_hits(chunks_by_id, facts) + _fact_priority_hits(
+            boosted_kw2 + boosted_vec2,
+            chunks_by_id,
+            facts,
+        )
+        hybrid2_candidates = _dedup_hits_by_chunk(
+            priority2_hits + hybrid2_candidates + boosted_kw2 + boosted_vec2
+        )
+        hybrid2_hits = _diversify_hits_by_source(hybrid2_candidates, top_k=top_k)
         neighbor2_hits = expand_neighbors(
             hybrid2_hits[:5], chunks_by_id, max_neighbors=max_neighbors
         )
 
         # Re-evaluate after second retrieval (never triggers another)
-        self_check = evaluate_after_second_retrieval(
-            hybrid2_hits, facts, chunks_by_id, self_check.issues
+        self_check = (
+            run_self_check_with_deepseek(hybrid2_hits, facts, chunks_by_id)
+            if review_mode == "llm"
+            else evaluate_after_second_retrieval(
+                hybrid2_hits, facts, chunks_by_id, self_check.issues
+            )
         )
+        self_check = self_check.model_copy(update={"second_retrieval_triggered": True})
 
         # Use second retrieval results as final evidence
         final_evidence = hybrid2_hits
@@ -401,7 +580,12 @@ def run_hybrid_retrieval(
     write_retrieval_traces(retrieval_traces_path(output_dir), updated_traces)
 
     # Issue 8: Build governed review result
-    review_result = build_review_result(
+    result_builder = (
+        build_review_result_with_deepseek
+        if review_mode == "llm"
+        else build_review_result
+    )
+    review_result = result_builder(
         review_result_id=case.latest_result_id or make_id("result"),
         review_case_id=case_id,
         trace_id=target_trace.trace_id,

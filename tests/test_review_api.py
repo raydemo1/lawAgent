@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from law_agent.data.io import write_jsonl
+from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.api import create_app
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
@@ -79,6 +80,60 @@ def test_review_returns_structured_response(client: TestClient) -> None:
 
     # Citation groups should be present
     assert isinstance(data["citation_groups"], list)
+
+
+def test_review_accepts_json_body_for_backward_compatibility(client: TestClient) -> None:
+    """POST /api/review still accepts the original JSON API contract."""
+
+    response = client.post(
+        "/api/review",
+        json={
+            "question": "这个场景是否需要数据出境安全评估？",
+            "material_text": "我们会将手机号发送给新加坡服务商。",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["review_facts"]["cross_border_transfer"] is True
+    assert data["review_result"]["conclusion"]
+
+
+def test_review_workflow_failure_returns_structured_review_failed(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workflow failures keep trace context instead of becoming HTTP 500."""
+
+    def fail_review_case(*args, **kwargs):
+        raise ReviewWorkflowFailed(
+            failed_node="fact_extraction",
+            reason="pydantic_validation_failed",
+            message="事实抽取结果未通过结构化校验",
+            attempts=3,
+            trace_id="trace_failure",
+        )
+
+    monkeypatch.setattr("law_agent.review.api.create_review_case", fail_review_case)
+
+    response = client.post(
+        "/api/review",
+        json={
+            "question": "这个场景是否需要数据出境安全评估？",
+            "material_text": "我们会将手机号发送给新加坡服务商。",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {
+        "status": "review_failed",
+        "failed_node": "fact_extraction",
+        "reason": "pydantic_validation_failed",
+        "message": "事实抽取结果未通过结构化校验",
+        "attempts": 3,
+        "trace_id": "trace_failure",
+    }
 
 
 def test_review_includes_trace_id(client: TestClient) -> None:
@@ -229,8 +284,8 @@ def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "mode_metrics" in data
-    assert "keyword" in data["mode_metrics"]
-    assert "hybrid" in data["mode_metrics"]
+    assert "rule_baseline" in data["mode_metrics"]
+    assert "local" in data["mode_metrics"]
 
 
 def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
@@ -271,8 +326,8 @@ def test_eval_run_returns_summary(client: TestClient) -> None:
     data = response.json()
     assert "generated_at" in data
     assert "mode_metrics" in data
-    assert data["mode_metrics"]["keyword"]["total_cases"] > 0
-    assert data["mode_metrics"]["hybrid"]["total_cases"] > 0
+    assert data["mode_metrics"]["rule_baseline"]["total_cases"] > 0
+    assert data["mode_metrics"]["local"]["total_cases"] > 0
 
 
 # ---------------------------------------------------------------------------

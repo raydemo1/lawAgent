@@ -1,13 +1,12 @@
-"""Deterministic and LLM-assisted retrieval query planning.
+"""Retrieval query planning.
 
 Issue 4: Generate typed ``RetrievalQuery`` objects from the user question plus
 extracted ``ReviewFacts``. Phase 2 retrieval should not be a raw user-query
 search; the review facts bridge concrete business material with
 metadata-aware legal evidence retrieval.
 
-The default planner is rule-based and dependency-free so tests never need an
-LLM. An LLM adapter function with the same callable signature is provided for
-optional production use.
+The deterministic planner remains available as an explicit baseline. The
+DeepSeek planner is the online LLM path and does not fall back to rules.
 """
 
 from __future__ import annotations
@@ -15,6 +14,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from pydantic import Field, field_validator
+
+from law_agent.config import require_llm_config
+from law_agent.data.schemas import StrictModel
+from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
+from law_agent.review.llm import StructuredLLMNode
 from law_agent.review.schemas import ReviewFacts, RetrievalQuery, RetrievalQueryType
 
 QueryPlanner = Callable[[str, ReviewFacts, str | None], list[RetrievalQuery]]
@@ -43,6 +48,40 @@ def _build_legal_issue_query(
         query_type="legal_issue",
         text=question,
     )
+
+
+def _build_topic_legal_queries(
+    question: str,
+    material_text: str | None,
+    ids: _QueryIdGenerator,
+) -> list[RetrievalQuery]:
+    text = f"{question} {material_text or ''}"
+    topics: list[str] = []
+    if "标准合同" in text:
+        topics.append("个人信息出境标准合同 办法 备案 指南 范本")
+    if "备案" in text:
+        topics.append("个人信息出境标准合同备案 指南 材料 流程")
+    if "负面清单" in text:
+        topics.append("自贸区 数据出境 负面清单 管理清单")
+    if "人脸" in text or "敏感个人信息" in text:
+        topics.append("敏感个人信息 人脸信息 个人信息保护法 处理规则")
+    if "汽车" in text or "智能网联" in text:
+        topics.append("汽车数据 智能网联汽车 数据出境 安全管理")
+
+    queries: list[RetrievalQuery] = []
+    seen: set[str] = set()
+    for topic in topics:
+        if topic in seen:
+            continue
+        seen.add(topic)
+        queries.append(
+            RetrievalQuery(
+                query_id=ids.next_id(),
+                query_type="legal_issue",
+                text=topic,
+            )
+        )
+    return queries
 
 
 def _build_material_fact_query(
@@ -132,6 +171,7 @@ def plan_queries(
 
     legal_query = _build_legal_issue_query(question, ids)
     queries.append(legal_query)
+    queries.extend(_build_topic_legal_queries(question, material_text, ids))
 
     material_query = _build_material_fact_query(facts, ids)
     if material_query is not None:
@@ -151,7 +191,7 @@ def plan_queries(
 
 
 # ---------------------------------------------------------------------------
-# Optional LLM-based planner (same callable signature)
+# DeepSeek LLM planner
 # ---------------------------------------------------------------------------
 
 _VALID_QUERY_TYPES: tuple[RetrievalQueryType, ...] = (
@@ -163,78 +203,110 @@ _VALID_QUERY_TYPES: tuple[RetrievalQueryType, ...] = (
 )
 
 
-def plan_queries_with_llm(
+class LLMRetrievalQuery(StrictModel):
+    query_type: RetrievalQueryType
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def text_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("text must not be blank")
+        return value
+
+
+class LLMQueryPlan(StrictModel):
+    queries: list[LLMRetrievalQuery] = Field(min_length=1)
+
+
+def build_query_planning_messages(
     question: str,
     facts: ReviewFacts,
     material_text: str | None = None,
-) -> list[RetrievalQuery]:
-    """Plan retrieval queries using an OpenAI-compatible LLM.
+) -> list[ChatMessage]:
+    """Build a DeepSeek JSON prompt for query planning."""
 
-    Requires ``OPENAI_COMPATIBLE_API_KEY`` to be configured. Falls back to
-    rule-based queries for any query type the LLM omits.
-    """
+    json_example = {
+        "queries": [
+            {
+                "query_type": "legal_issue",
+                "text": "数据出境安全评估 申报条件",
+            },
+            {
+                "query_type": "material_fact",
+                "text": "手机号 定位信息 新加坡 数据出境",
+            },
+            {
+                "query_type": "missing_information",
+                "text": "数据出境安全评估 数据规模 阈值 单独同意",
+            },
+        ]
+    }
 
-    from law_agent.config import require_llm_config
-    from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
-
-    config = require_llm_config()
-    client = OpenAICompatibleClient(config)
-
-    prompt = {
+    user_payload = {
         "question": question,
         "review_facts": facts.model_dump(),
         "material_text": (material_text or "")[:6000],
-        "query_types": list(_VALID_QUERY_TYPES),
-        "instructions": (
-            "基于用户问题和审查事实，生成多个类型化检索查询。"
-            "每个查询包含 query_type 和 text。只输出 JSON object，"
-            "格式为 {\"queries\": [{\"query_type\": \"...\", \"text\": \"...\"}]}。"
-        ),
+        "allowed_query_types": list(_VALID_QUERY_TYPES),
+        "json_example": json_example,
+        "instructions": [
+            "基于用户问题和审查事实生成多个类型化检索查询。",
+            "必须输出合法 json object，字段必须与 json_example 完全一致。",
+            "query_type 只能使用 allowed_query_types 中的值。",
+            "不要输出 query_id，query_id 由程序生成。",
+        ],
     }
 
-    data = client.chat_json(
-        [
-            ChatMessage(
-                role="system",
-                content=(
-                    "你是法律合规检索查询规划助手。"
-                    "生成覆盖法律问题、材料事实、地区条件、行业条件和缺失信息的检索查询。"
-                    "必须输出 JSON object。"
-                ),
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是法律合规检索 query planning 助手。"
+                "只输出 json，不输出解释、markdown 或自然语言。"
             ),
-            ChatMessage(role="user", content=json.dumps(prompt, ensure_ascii=False)),
-        ]
-    )
+        ),
+        ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
+    ]
 
-    raw_queries = data.get("queries", [])
-    if not isinstance(raw_queries, list):
-        raw_queries = []
+
+def plan_queries_with_deepseek(
+    question: str,
+    facts: ReviewFacts,
+    material_text: str | None = None,
+    *,
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+    trace_id: str | None = None,
+) -> list[RetrievalQuery]:
+    """Plan retrieval queries using DeepSeek with strict validation.
+
+    This is the online LLM path. It does not fill omitted query types from
+    rules and does not parse natural-language responses.
+    """
+
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+    node = StructuredLLMNode(
+        node_name="query_planning",
+        output_model=LLMQueryPlan,
+        client=client,
+        max_retries=max_retries,
+        trace_id=trace_id,
+    )
+    plan = node.run(build_query_planning_messages(question, facts, material_text))
 
     ids = _QueryIdGenerator()
-    llm_queries: list[RetrievalQuery] = []
-    seen_types: set[str] = set()
-
-    for raw in raw_queries:
-        if not isinstance(raw, dict):
-            continue
-        query_type = raw.get("query_type")
-        text = raw.get("text")
-        if not isinstance(query_type, str) or query_type not in _VALID_QUERY_TYPES:
-            continue
-        if not isinstance(text, str) or not text.strip():
-            continue
-        if query_type in seen_types:
-            continue
-        seen_types.add(query_type)
-        llm_queries.append(
+    queries: list[RetrievalQuery] = []
+    for query in plan.queries:
+        queries.append(
             RetrievalQuery(
                 query_id=ids.next_id(),
-                query_type=query_type,
-                text=text.strip(),
+                query_type=query.query_type,
+                text=query.text.strip(),
             )
         )
 
-    if not llm_queries:
-        return plan_queries(question, facts, material_text)
+    return queries
 
-    return llm_queries
+
+plan_queries_with_llm = plan_queries_with_deepseek

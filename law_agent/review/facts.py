@@ -1,12 +1,11 @@
-"""Deterministic and LLM-assisted review fact extraction.
+"""Review fact extraction.
 
 Issue 4: Extract fixed ``ReviewFacts`` from review material so that later
 retrieval slices can bridge concrete business material with metadata-aware
 legal evidence retrieval.
 
-The default extractor is rule-based and dependency-free so tests never need
-an LLM. An LLM adapter function with the same callable signature is provided
-for optional production use.
+The deterministic extractor remains available as an explicit baseline. The
+DeepSeek extractor is the online LLM path and does not fall back to rules.
 """
 
 from __future__ import annotations
@@ -15,6 +14,10 @@ import json
 import re
 from collections.abc import Callable
 
+from law_agent.config import require_llm_config
+from law_agent.data.schemas import StrictModel
+from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
+from law_agent.review.llm import StructuredLLMNode
 from law_agent.review.schemas import ReviewFacts
 
 FactsExtractor = Callable[[str, str | None], ReviewFacts]
@@ -78,6 +81,10 @@ _DATA_TYPE_TERMS: dict[str, str] = {
     "银行卡": "银行账户",
     "银行账户": "银行账户",
     "交易记录": "交易记录",
+    "员工数据": "员工个人信息",
+    "客户信息": "客户个人信息",
+    "用户数据": "用户个人信息",
+    "个人信息": "个人信息",
     "通讯录": "通讯录",
     "照片": "照片",
     "指纹": "指纹",
@@ -269,8 +276,8 @@ def extract_facts(material_text: str, question: str | None = None) -> ReviewFact
     text = material_text
 
     data_types = _detect_data_types(text)
-    cross_border = any(term in text for term in _CROSS_BORDER_TERMS)
     overseas_recipient = _detect_overseas_recipient(text)
+    cross_border = any(term in text for term in _CROSS_BORDER_TERMS) or bool(overseas_recipient)
     sensitive = any(hint in text for hint in _SENSITIVE_HINTS)
     industry = _detect_industry(text)
     region = _detect_region(text)
@@ -300,93 +307,96 @@ def extract_facts(material_text: str, question: str | None = None) -> ReviewFact
 
 
 # ---------------------------------------------------------------------------
-# Optional LLM-based extractor (same callable signature)
+# DeepSeek LLM extractor
 # ---------------------------------------------------------------------------
 
 _LLM_PROMPT_VERSION = "0.1.0"
 
 
-def extract_facts_with_llm(material_text: str, question: str | None = None) -> ReviewFacts:
-    """Extract ``ReviewFacts`` using an OpenAI-compatible LLM.
+class LLMReviewFacts(StrictModel):
+    """Required-field schema for LLM fact extraction output."""
 
-    Requires ``OPENAI_COMPATIBLE_API_KEY`` to be configured. Falls back to
-    rule-based extraction for any field the LLM omits.
-    """
+    business_activity: str | None
+    data_types: list[str]
+    sensitive_personal_info: bool | None
+    cross_border_transfer: bool | None
+    overseas_recipient: str | None
+    processing_purpose: str | None
+    legal_basis_or_consent: str | None
+    industry: str | None
+    region: str | None
+    missing_information: list[str]
 
-    from law_agent.config import require_llm_config
-    from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
 
-    config = require_llm_config()
-    client = OpenAICompatibleClient(config)
+def build_fact_extraction_messages(
+    material_text: str,
+    question: str | None = None,
+) -> list[ChatMessage]:
+    """Build a DeepSeek JSON prompt for fact extraction."""
 
-    prompt = {
-        "question": question,
-        "material_text": material_text[:6000],
-        "required_schema": {
-            "business_activity": "string or null",
-            "data_types": ["string"],
-            "sensitive_personal_info": "boolean or null",
-            "cross_border_transfer": "boolean or null",
-            "overseas_recipient": "string or null",
-            "processing_purpose": "string or null",
-            "legal_basis_or_consent": "string or null",
-            "industry": "string or null",
-            "region": "string or null",
-            "missing_information": ["string"],
-        },
-        "instructions": (
-            "从用户材料中抽取合规审查事实。只输出 JSON object。"
-            "未检测到的事实用 null。missing_information 列出缺失的必要事实。"
-        ),
+    json_example = {
+        "business_activity": "移动 App 个性化推荐和数据分析",
+        "data_types": ["手机号", "定位信息", "设备标识"],
+        "sensitive_personal_info": True,
+        "cross_border_transfer": True,
+        "overseas_recipient": "新加坡数据分析服务商",
+        "processing_purpose": "推荐优化和行为分析",
+        "legal_basis_or_consent": None,
+        "industry": None,
+        "region": "CN",
+        "missing_information": ["legal_basis_or_consent", "data_volume_threshold"],
     }
 
-    data = client.chat_json(
-        [
-            ChatMessage(
-                role="system",
-                content=(
-                    "你是法律合规审查事实抽取助手。"
-                    "只基于用户材料抽取事实，不推测。必须输出 JSON object。"
-                ),
+    user_payload = {
+        "prompt_version": _LLM_PROMPT_VERSION,
+        "question": question,
+        "material_text": material_text[:6000],
+        "json_example": json_example,
+        "instructions": [
+            "只基于用户材料抽取事实，不要推测材料中没有的信息。",
+            "必须输出合法 json object，字段必须与 json_example 完全一致。",
+            "未检测到的事实用 null，列表字段用 []。",
+            "missing_information 只列出仍需用户补充的事实键。",
+        ],
+    }
+
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是法律合规审查事实抽取助手。"
+                "只输出 json，不输出解释、markdown 或自然语言。"
             ),
-            ChatMessage(role="user", content=json.dumps(prompt, ensure_ascii=False)),
-        ]
-    )
-
-    rules_facts = extract_facts(material_text, question)
-
-    def _coerce_str(value: object) -> str | None:
-        if value is None:
-            return None
-        text = str(value).strip()
-        return text or None
-
-    def _coerce_bool(value: object) -> bool | None:
-        if value is None:
-            return None
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "yes", "是"}
-        return bool(value)
-
-    def _coerce_list(value: object) -> list[str]:
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        return []
-
-    return ReviewFacts(
-        business_activity=_coerce_str(data.get("business_activity")),
-        data_types=_coerce_list(data.get("data_types")) or rules_facts.data_types,
-        sensitive_personal_info=_coerce_bool(data.get("sensitive_personal_info")),
-        cross_border_transfer=_coerce_bool(data.get("cross_border_transfer")),
-        overseas_recipient=_coerce_str(data.get("overseas_recipient")),
-        processing_purpose=_coerce_str(data.get("processing_purpose")),
-        legal_basis_or_consent=_coerce_str(data.get("legal_basis_or_consent")),
-        industry=_coerce_str(data.get("industry")),
-        region=_coerce_str(data.get("region")),
-        missing_information=(
-            _coerce_list(data.get("missing_information"))
-            or rules_facts.missing_information
         ),
+        ChatMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False)),
+    ]
+
+
+def extract_facts_with_deepseek(
+    material_text: str,
+    question: str | None = None,
+    *,
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+    trace_id: str | None = None,
+) -> ReviewFacts:
+    """Extract ``ReviewFacts`` using DeepSeek with strict validation.
+
+    This is the online LLM path. It does not fill omitted fields from rules and
+    does not parse natural-language responses.
+    """
+
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+    node = StructuredLLMNode(
+        node_name="fact_extraction",
+        output_model=LLMReviewFacts,
+        client=client,
+        max_retries=max_retries,
+        trace_id=trace_id,
     )
+    output = node.run(build_fact_extraction_messages(material_text, question))
+    return ReviewFacts.model_validate(output.model_dump(), strict=True)
+
+
+extract_facts_with_llm = extract_facts_with_deepseek

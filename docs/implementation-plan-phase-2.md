@@ -8,12 +8,12 @@
 
 1. 用户输入审查问题，并粘贴业务说明、隐私政策片段、SDK/字段说明等文本材料。
 2. PDF/DOCX 上传作为 beta 入口，通过已有 Docling/解析器链路解析成文本后进入同一流程。
-3. 系统抽取固定审查事实。
-4. 系统基于审查事实和用户问题生成多路检索 query。
+3. DeepSeek LLM 节点抽取固定审查事实，输出必须通过 Pydantic 严格校验。
+4. DeepSeek LLM 节点基于审查事实和用户问题生成多路检索 query。
 5. 系统从当前 `artifacts/review/legal_docs_20260702/chunks.jsonl` 加载 42 份清洗后的法规/政策 chunk。
 6. 系统执行本地 hybrid retrieval core：BM25、vector mock、metadata boost、RRF 融合、父文档/邻近 chunk 补充。
-7. 证据自检判断是否需要一次受控二次召回。
-8. 系统输出结构化审查结果，并严格执行引用规则。
+7. DeepSeek LLM 证据自检节点判断是否需要一次受控二次召回。
+8. DeepSeek LLM 节点输出结构化审查结果，程序严格执行引用规则。
 9. 前端从 mock 升级为单用户审查工作台，调用真实 review API 展示结果。
 10. 评估看板展示检索/引用最小闭环指标和 bad cases。
 
@@ -26,9 +26,9 @@
 3. 复杂扫描件、复杂表格和页码级引用质量的专项解析评估。
 4. 完整 RAGAS/LLM-as-judge 回答质量平台。
 5. 循环式 Agent 检索。
-6. 把 PostgreSQL/pgvector 和 Elasticsearch 作为前半程主闭环阻塞项。
+6. 多 provider LLM 能力抽象和线上规则 fallback。
 
-PostgreSQL/pgvector 和 Elasticsearch 仍是目标服务后端，但先在本地 hybrid review loop 验证产品行为、检索策略、引用规则和评估集。
+PostgreSQL/pgvector 和 Elasticsearch 仍是目标服务后端。Issue 12 接入服务后端时，service 模式要求 Elasticsearch 和 pgvector 都可用并融合检索；单路服务检索只作为显式诊断/消融模式。
 
 ## 主用户和使用流程
 
@@ -39,11 +39,11 @@ PostgreSQL/pgvector 和 Elasticsearch 仍是目标服务后端，但先在本地
 1. 用户新建审查案卷。
 2. 用户输入审查问题，例如“这个场景是否需要数据出境安全评估？”
 3. 用户粘贴业务说明或隐私政策片段；如上传 PDF/DOCX，则先通过 Docling beta 路径解析。
-4. 系统抽取审查事实，并在前端展示事实摘要和缺失信息。
-5. 系统生成多路检索 query。
+4. DeepSeek LLM 抽取审查事实，并在前端展示事实摘要和缺失信息。
+5. DeepSeek LLM 生成多路检索 query。
 6. 系统执行本地混合检索和 RRF 融合。
-7. 系统执行证据自检；证据不足时最多触发一次二次召回。
-8. 系统生成结构化审查结果。
+7. DeepSeek LLM 执行证据自检；证据不足时最多触发一次二次召回。
+8. DeepSeek LLM 生成结构化审查结果。
 9. 前端展示风险等级、触发原因、适用依据、缺失信息、建议动作、风险边界和引用来源。
 10. 系统保存 review case 和 retrieval trace，供评估、依据过程展示和 bad case 复盘使用。
 
@@ -70,7 +70,7 @@ PostgreSQL/pgvector 和 Elasticsearch 仍是目标服务后端，但先在本地
 }
 ```
 
-第一版可以用 LLM 抽取，但输出必须经过 Pydantic schema 校验。抽取失败或关键字段缺失时，不阻塞检索，但必须进入 `missing_information` 并影响最终结论。
+第一版用 DeepSeek LLM 抽取，prompt 必须包含目标 JSON 示例，输出必须经过 Pydantic schema 严格校验。模型输出不合格时只做节点级 retry；重试耗尽返回结构化 `review_failed`。业务材料本身缺少关键字段时，进入 `missing_information` 并影响最终结论。
 
 ### ReviewCase
 
@@ -124,7 +124,7 @@ PostgreSQL/pgvector 和 Elasticsearch 仍是目标服务后端，但先在本地
 3. 条件 query：例如“汽车数据出境”或“上海 数据出境 负面清单”。
 4. 缺失信息 query：例如“数据出境安全评估 数量门槛”。
 
-LLM 可以参与 query 改写，但最终 query 列表和 query 类型要进入 trace。
+Query planning 由 DeepSeek LLM 节点负责，prompt 必须包含目标 JSON 示例，最终 query 列表和 query 类型要进入 trace。模型输出不合格时只做节点级 retry；重试耗尽返回结构化 `review_failed`。
 
 ### 2. Metadata boost/filter
 
@@ -185,14 +185,14 @@ RRF 在应用层融合两路召回结果。融合结果必须保留：
 
 ## 结构化审查输出
 
-第二阶段不是不用大模型，而是不让大模型自由决定最终结构和引用边界。
+第二阶段正式引入 DeepSeek LLM，但不让模型自由决定最终结构和引用边界。
 
 LLM 负责：
 
 1. 审查事实抽取。
-2. query 改写。
-3. 阅读召回证据并生成结构化审查草案。
-4. 生成用户可读解释。
+2. query planning。
+3. 证据自检和一次补充检索计划。
+4. 结构化审查结果生成和用户可读解释。
 
 程序负责：
 
@@ -200,7 +200,9 @@ LLM 负责：
 2. 引用来源校验。
 3. citation role 分组。
 4. `can_cite_clause` 条款引用门禁。
-5. 证据不足时拒答或要求补充信息。
+5. 节点级 retry 编排和 `review_failed` 错误上抛。
+
+线上 LLM 模式不使用规则 fallback。规则路径只作为 baseline evaluation 对比；模型 API 失败、schema 校验失败、引用校验 retry 耗尽等系统故障必须显式返回 `review_failed`。
 
 建议输出结构：
 
@@ -240,13 +242,15 @@ LLM 负责：
 3. 支持 PDF/DOCX beta 上传。
 4. 调用真实 review API。
 5. 展示 `ReviewFacts`。
-6. 展示结构化审查结果。
+6. 展示 LLM query plan。
 7. 展示证据状态和二次召回状态。
-8. 展示引用来源分组。
-9. 展示缺失信息、建议动作和风险边界。
-10. 评测看板展示最新 eval run 指标和 bad cases。
+8. 展示结构化审查结果。
+9. 展示引用来源分组。
+10. 展示缺失信息、建议动作和风险边界。
+11. 展示 `review_failed` 的失败节点、说明、尝试次数和 trace id。
+12. 评测看板展示最新 eval run 指标和 bad cases。
 
-不展示清洗前后文本、chunk 列表、embedding 向量、索引构建细节。
+不默认展示 raw prompt、raw model output、validation errors、token usage、清洗前后文本、chunk 列表、embedding 向量、索引构建细节。
 
 ## 评估设计
 
@@ -261,12 +265,12 @@ LLM 负责：
 5. 二次召回命中提升
 6. citation rule violation count
 
-Baseline：
+评估模式：
 
-1. BM25 only
-2. vector mock only
-3. hybrid RRF
-4. hybrid RRF + second retrieval
+1. `rule_baseline`: deterministic rules only, used for comparison.
+2. `local`: local hybrid retrieval core.
+3. `service`: Elasticsearch + pgvector fused retrieval; either service missing is a failure.
+4. `llm`: DeepSeek-owned fact extraction, query planning, evidence check, and result generation.
 
 黄金集以场景审查题为主，条款定位题只作为 sanity check。
 
@@ -306,9 +310,11 @@ Baseline：
 
 ### Step 2: Fact extraction 和 query planning
 
-1. 实现规则/LLM 可替换的 fact extractor。
-2. 实现 query planner。
-3. 测试缺失信息和地区/行业字段抽取。
+1. 实现最小 DeepSeek client wrapper。
+2. 实现 DeepSeek fact extraction 节点。
+3. 实现 DeepSeek query planning 节点。
+4. 为两个节点增加 JSON 示例 prompt、Pydantic 严格校验和节点级 retry。
+5. 测试缺失信息、地区/行业字段抽取、query 类型和 retry 耗尽后的 `review_failed`。
 
 ### Step 3: Local hybrid retrieval core
 
@@ -321,39 +327,44 @@ Baseline：
 
 ### Step 4: Evidence self-check 和 citation validator
 
-1. 实现证据充足性判断。
+1. 实现 DeepSeek evidence check 节点。
 2. 实现一次二次召回。
 3. 实现 citation role 分组。
 4. 实现 `can_cite_clause` 校验。
-5. 实现拒答/缺失信息输出。
+5. 实现证据不足审查结果和 `review_failed` 的区分。
 
 ### Step 5: Structured review generation
 
 1. 实现结构化审查结果 schema。
-2. 接入 LLM 生成结构化草案。
-3. 程序化校验引用和风险边界。
-4. 无 LLM 时保留规则化 fallback，方便测试。
+2. 接入 DeepSeek 生成结构化审查结果。
+3. 为 result generation 增加 JSON 示例 prompt、Pydantic 严格校验和节点级 retry。
+4. 程序化校验引用和风险边界。
+5. 引用校验失败后重试 result generation；重试耗尽返回 `review_failed`。
 
 ### Step 6: Evaluation
 
 1. 新建 scenario golden set。
 2. 实现 Recall@3、Recall@5、MRR@10。
-3. 实现拒答准确率、二次召回提升、citation violation 检查。
-4. 输出 bad cases JSON/Markdown/前端可读数据。
+3. 实现拒答准确率、二次召回提升、citation violation 和 `review_failed` 统计。
+4. 支持 `rule_baseline`、`local`、`service`、`llm` 模式对比。
+5. 输出 bad cases JSON/Markdown/前端可读数据。
 
 ### Step 7: Review API 和前端接线
 
 1. 新增本地 review API。
 2. 前端提交问题和材料。
-3. 前端展示 facts、结果、证据、引用、trace 摘要。
-4. 前端评测看板读取 eval run 输出。
+3. API 支持成功响应和结构化 `review_failed` 响应。
+4. 前端展示 facts、query plan、证据、二次召回、结果、引用、trace 摘要。
+5. 前端评测看板读取 eval run 输出。
 
 ### Step 8: 服务后端增强
 
 1. 接 PostgreSQL/pgvector adapter。
 2. 接 Elasticsearch adapter。
-3. 使用同一 golden set 对比本地 core 和真实 backend。
-4. 评估稳定后再决定是否引入 reranker。
+3. 增加 corpus index 脚本。
+4. `service` 模式要求 ES + pgvector 都可用并融合检索。
+5. 使用同一 golden set 对比 `local`、`service`、`llm` 和 `rule_baseline`。
+6. 评估稳定后再决定是否引入 reranker。
 
 ## 验收清单
 
@@ -362,24 +373,25 @@ Baseline：
 1. 能加载当前 42 份清洗后的法规/政策 chunk。
 2. 能创建审查案卷并处理粘贴材料。
 3. PDF/DOCX 上传 beta 能通过 Docling 或现有 parser 进入同一流程。
-4. 能抽取固定 `ReviewFacts`。
+4. 能用 DeepSeek 抽取固定 `ReviewFacts`。
 5. 能执行本地 BM25/vector mock/RRF/metadata boost。
-6. 能最多触发一次受控二次召回。
-7. 能输出结构化审查结果。
+6. 能用 DeepSeek 证据自检最多触发一次受控二次召回。
+7. 能用 DeepSeek 输出结构化审查结果。
 8. 能强制 citation policy。
 9. 能保存 `ReviewCase` 和 `RetrievalTrace` JSONL。
 10. 前端能调用真实 review API。
-11. 评估能跑 scenario golden set。
-12. 能输出 Recall@3、Recall@5、MRR@10、拒答准确率、二次召回提升和 bad cases。
-13. 至少跑通 3 个端到端 demo 场景：数据出境/标准合同、行业条件、地区负面清单。
-14. 测试覆盖 schema、retriever、RRF、citation validator、eval metrics 和至少一条端到端审查流程。
+11. 前端能展示 LLM trace 摘要和结构化 `review_failed`。
+12. 评估能跑 scenario golden set。
+13. 能输出 Recall@3、Recall@5、MRR@10、拒答准确率、二次召回提升、`review_failed` 率和 bad cases。
+14. 至少跑通 3 个端到端 demo 场景：数据出境/标准合同、行业条件、地区负面清单。
+15. 测试覆盖 schema、retriever、RRF、citation validator、eval metrics、LLM 节点 retry 和至少一条端到端审查流程。
 
 第二阶段增强：
 
 1. PostgreSQL/pgvector adapter。
 2. Elasticsearch adapter。
-3. 真实 embedding。
-4. reranker 评估。
-5. 解析质量专项评估。
-6. 完整回答质量评估平台。
-
+3. corpus index 脚本。
+4. 真实 embedding。
+5. reranker 评估。
+6. 解析质量专项评估。
+7. 完整回答质量评估平台。

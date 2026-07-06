@@ -399,6 +399,59 @@ def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     assert trace.metadata_boosts  # boost summary recorded
 
 
+def test_run_hybrid_retrieval_llm_mode_uses_llm_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from law_agent.review.schemas import EvidenceSelfCheck, ReviewResult
+    from law_agent.review.service import create_review_case, run_hybrid_retrieval
+
+    chunks_path = _write_fixture_corpus(tmp_path)
+    calls: list[str] = []
+
+    create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号发送给新加坡服务商。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    def fake_self_check(*args, **kwargs):
+        calls.append("evidence")
+        return EvidenceSelfCheck(status="sufficient")
+
+    def fake_result_builder(**kwargs):
+        calls.append("result")
+        return ReviewResult(
+            review_result_id=kwargs["review_result_id"],
+            review_case_id=kwargs["review_case_id"],
+            trace_id=kwargs["trace_id"],
+            risk_level="medium",
+            conclusion="LLM structured result",
+            review_facts=kwargs["facts"],
+        )
+
+    monkeypatch.setattr(
+        "law_agent.review.service.run_self_check_with_deepseek",
+        fake_self_check,
+    )
+    monkeypatch.setattr(
+        "law_agent.review.service.build_review_result_with_deepseek",
+        fake_result_builder,
+    )
+
+    run_hybrid_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+        review_mode="llm",
+    )
+
+    assert calls == ["evidence", "result"]
+
+
 def test_run_hybrid_retrieval_persists_to_trace(tmp_path: Path) -> None:
     from law_agent.review.io import read_retrieval_traces
     from law_agent.review.service import create_review_case, run_hybrid_retrieval

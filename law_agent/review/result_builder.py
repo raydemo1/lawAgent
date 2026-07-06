@@ -16,8 +16,14 @@ Risk level logic:
 
 from __future__ import annotations
 
+import json
+
+from law_agent.config import require_llm_config
 from law_agent.data.schemas import Chunk
+from law_agent.data.schemas import StrictModel
+from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
 from law_agent.review.citations import group_citations
+from law_agent.review.llm import StructuredLLMNode
 from law_agent.review.schemas import (
     Citation,
     CitationGroup,
@@ -25,6 +31,7 @@ from law_agent.review.schemas import (
     ReviewFacts,
     ReviewResult,
     RetrievalHit,
+    RiskLevel,
 )
 
 # ---------------------------------------------------------------------------
@@ -34,6 +41,17 @@ from law_agent.review.schemas import (
 _HIGH_RISK_SENSITIVE_TERMS: tuple[str, ...] = (
     "人脸", "指纹", "生物识别", "身份证号", "医疗", "病历",
 )
+
+
+class LLMReviewResultDraft(StrictModel):
+    """Required-field schema for LLM structured review generation."""
+
+    risk_level: RiskLevel
+    conclusion: str
+    trigger_reasons: list[str]
+    missing_information: list[str]
+    recommended_actions: list[str]
+    risk_boundaries: list[str]
 
 
 def _has_high_risk_triggers(facts: ReviewFacts) -> bool:
@@ -315,6 +333,119 @@ def build_review_result(
         missing_information=facts.missing_information,
         recommended_actions=recommended_actions,
         risk_boundaries=risk_boundaries,
+        citations=all_citations,
+        applicable_evidence=citation_groups,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek structured result generation
+# ---------------------------------------------------------------------------
+
+def build_result_generation_messages(
+    *,
+    facts: ReviewFacts,
+    self_check: EvidenceSelfCheck,
+    evidence_hits: list[RetrievalHit],
+) -> list[ChatMessage]:
+    """Build a DeepSeek JSON prompt for structured review result generation."""
+
+    json_example = {
+        "risk_level": "medium",
+        "conclusion": "该场景可能涉及个人信息跨境提供，但仍需补充数据规模和同意情况。",
+        "trigger_reasons": ["cross_border_transfer", "missing_information"],
+        "missing_information": ["legal_basis_or_consent", "data_volume_threshold"],
+        "recommended_actions": ["确认是否取得单独同意", "确认出境数据规模"],
+        "risk_boundaries": ["本结论基于当前材料和已召回证据，不构成正式法律意见"],
+    }
+    evidence = [
+        {
+            "chunk_id": hit.chunk_id,
+            "source_id": hit.source_id,
+            "title": hit.title,
+            "text": hit.text[:1200],
+            "citation_role": hit.citation_role,
+            "can_cite_clause": hit.can_cite_clause,
+            "source_url": hit.source_url,
+        }
+        for hit in evidence_hits[:12]
+    ]
+    payload = {
+        "review_facts": facts.model_dump(),
+        "evidence_self_check": self_check.model_dump(),
+        "evidence": evidence,
+        "json_example": json_example,
+        "instructions": [
+            "基于审查事实和证据生成结构化审查结果。",
+            "必须输出合法 json object，字段必须与 json_example 完全一致。",
+            "risk_level 只能是 high、medium、low、insufficient_evidence。",
+            "不得编造未出现在证据中的法律来源。",
+            "引用分组由程序处理，本节点不要输出 citations。",
+            "不要输出解释、markdown 或自然语言。",
+        ],
+    }
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是企业数据合规审查结果生成助手。"
+                "只输出 json，不输出解释、markdown 或自然语言。"
+            ),
+        ),
+        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+    ]
+
+
+def build_review_result_with_deepseek(
+    *,
+    review_result_id: str,
+    review_case_id: str,
+    trace_id: str,
+    facts: ReviewFacts,
+    self_check: EvidenceSelfCheck,
+    evidence_hits: list[RetrievalHit],
+    chunks_by_id: dict[str, Chunk] | None = None,
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+) -> ReviewResult:
+    """Build a governed ReviewResult using DeepSeek for result content."""
+
+    if chunks_by_id is None:
+        chunks_by_id = {}
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+
+    node = StructuredLLMNode(
+        node_name="result_generation",
+        output_model=LLMReviewResultDraft,
+        client=client,
+        max_retries=max_retries,
+        trace_id=trace_id,
+    )
+    draft = node.run(
+        build_result_generation_messages(
+            facts=facts,
+            self_check=self_check,
+            evidence_hits=evidence_hits,
+        )
+    )
+
+    citation_groups, _violations = group_citations(evidence_hits, facts, chunks_by_id)
+    all_citations: list[Citation] = []
+    for group in citation_groups:
+        all_citations.extend(group.citations)
+
+    return ReviewResult(
+        review_result_id=review_result_id,
+        review_case_id=review_case_id,
+        trace_id=trace_id,
+        risk_level=draft.risk_level,
+        conclusion=draft.conclusion,
+        review_facts=facts,
+        trigger_reasons=draft.trigger_reasons,
+        missing_information=draft.missing_information,
+        recommended_actions=draft.recommended_actions,
+        risk_boundaries=draft.risk_boundaries,
         citations=all_citations,
         applicable_evidence=citation_groups,
     )

@@ -18,7 +18,7 @@ RetrievalQueryType = Literal[
     "industry_condition",
     "missing_information",
 ]
-RetrieverName = Literal["keyword", "vector_mock", "hybrid"]
+RetrieverName = Literal["keyword", "vector_mock", "hybrid", "elasticsearch", "pgvector"]
 EvidenceStatus = Literal["not_checked", "sufficient", "needs_second_retrieval", "insufficient"]
 CitationUsage = Literal[
     "legal_basis",
@@ -215,3 +215,14 @@ class ReviewRunResponse(StrictModel):
     case_path: Path
     trace_path: Path
     result_path: Path
+
+
+class ReviewFailedResponse(StrictModel):
+    """Minimal structured response for workflow failures."""
+
+    status: Literal["review_failed"] = "review_failed"
+    failed_node: str
+    reason: str
+    message: str
+    attempts: int
+    trace_id: str | None = None

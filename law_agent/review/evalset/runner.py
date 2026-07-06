@@ -1,7 +1,7 @@
-"""Evaluation runner for review retrieval modes (Issue 9).
+"""Evaluation runner for review modes (Issue 9).
 
-Runs each golden-set scenario through both keyword and hybrid retrieval
-modes, computes metrics, and produces a comparison summary.
+Runs golden-set scenarios through explicit review modes, computes metrics,
+and produces a comparison summary.
 """
 
 from __future__ import annotations
@@ -30,14 +30,21 @@ from law_agent.review.result_builder import build_review_result
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, load_corpus
 from law_agent.review.service import create_review_case, run_hybrid_retrieval, run_keyword_retrieval
 
+DEFAULT_EVAL_MODES: tuple[str, ...] = ("rule_baseline", "local")
+_MODE_ALIASES: dict[str, str] = {
+    "keyword": "rule_baseline",
+    "hybrid": "local",
+}
+
 
 def run_evaluation(
     *,
     chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
     scenarios: list[EvalScenario] | None = None,
     top_k: int = 10,
+    modes: list[str] | tuple[str, ...] | None = None,
 ) -> EvalSummary:
-    """Run full evaluation across both modes.
+    """Run full evaluation across selected modes.
 
     Returns an ``EvalSummary`` with per-mode aggregated metrics and bad cases.
     """
@@ -47,36 +54,35 @@ def run_evaluation(
 
     generated_at = utc_now_iso()
 
-    # Run each scenario in both modes
-    keyword_results: list[CaseMetricResult] = []
-    hybrid_results: list[CaseMetricResult] = []
+    selected_modes = tuple(modes or DEFAULT_EVAL_MODES)
+    canonical_modes = tuple(_MODE_ALIASES.get(mode, mode) for mode in selected_modes)
 
-    for scenario in scenarios:
-        kw_result = _run_single_case(scenario, chunks_path, mode="keyword", top_k=top_k)
-        hy_result = _run_single_case(scenario, chunks_path, mode="hybrid", top_k=top_k)
-        keyword_results.append(kw_result)
-        hybrid_results.append(hy_result)
+    results_by_mode: dict[str, list[CaseMetricResult]] = {}
+    for mode in canonical_modes:
+        mode_results: list[CaseMetricResult] = []
+        for scenario in scenarios:
+            mode_results.append(_run_single_case(scenario, chunks_path, mode=mode, top_k=top_k))
+        results_by_mode[mode] = mode_results
 
-    # Aggregate
-    kw_metrics = aggregate_metrics(keyword_results, "keyword")
-    hy_metrics = aggregate_metrics(hybrid_results, "hybrid")
+    mode_metrics = {
+        mode: aggregate_metrics(results, mode)
+        for mode, results in results_by_mode.items()
+    }
 
-    # Collect bad cases from both modes
-    all_bad = [r for r in keyword_results + hybrid_results if r.is_bad_case]
+    all_results = [
+        result
+        for results in results_by_mode.values()
+        for result in results
+    ]
+    all_bad = [r for r in all_results if r.is_bad_case]
 
     return EvalSummary(
         generated_at=generated_at,
         chunks_path=str(chunks_path),
         cases_path="default",
-        mode_metrics={
-            "keyword": kw_metrics,
-            "hybrid": hy_metrics,
-        },
+        mode_metrics=mode_metrics,
         bad_cases=all_bad,
-        all_case_results={
-            "keyword": keyword_results,
-            "hybrid": hybrid_results,
-        },
+        all_case_results=results_by_mode,
     )
 
 
@@ -89,8 +95,16 @@ def _run_single_case(
 ) -> CaseMetricResult:
     """Run a single scenario in one mode and return metrics."""
 
+    mode = _MODE_ALIASES.get(mode, mode)
+    if mode == "service":
+        raise RuntimeError(
+            "service eval mode requires both Elasticsearch and pgvector adapters; "
+            "no fallback to local retrieval is allowed"
+        )
+
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
+        review_mode = "llm" if mode == "llm" else "rule_baseline"
 
         # Create review case
         response = create_review_case(
@@ -99,16 +113,18 @@ def _run_single_case(
             output_dir=tmp_path,
             now=lambda: "2026-07-06T00:00:00+00:00",
             id_factory=lambda prefix: f"{prefix}_eval",
+            review_mode=review_mode,
         )
 
         case_id = "review_eval"
 
-        if mode == "hybrid":
+        if mode in {"local", "llm"}:
             trace = run_hybrid_retrieval(
                 case_id=case_id,
                 chunks_path=chunks_path,
                 output_dir=tmp_path,
                 top_k=top_k,
+                review_mode=review_mode,
             )
             hits = trace.final_evidence or trace.hybrid_results
             second_retrieval_triggered = trace.evidence_self_check.second_retrieval_triggered
@@ -151,19 +167,23 @@ def _run_single_case(
             write_review_results(results_path, updated_results)
             second_retrieval_triggered = self_check.second_retrieval_triggered
 
-        # Get risk level from result
+        # Get risk level and final citations from result.
         results_path = tmp_path / "review_results.jsonl"
         risk_level = ""
+        citation_groups = None
         if results_path.exists():
             results = read_review_results(results_path)
             if results:
-                risk_level = results[0].risk_level
+                result = results[0]
+                risk_level = result.risk_level
+                citation_groups = result.applicable_evidence
 
         return evaluate_case(
             scenario,
             hits,
             risk_level=risk_level,
             second_retrieval_triggered=second_retrieval_triggered,
+            citation_groups=citation_groups,
         )
 
 
@@ -177,7 +197,7 @@ def format_summary_text(summary: EvalSummary) -> str:
     lines.append(f"Cases: {summary.cases_path}")
     lines.append("=" * 70)
 
-    for mode_name in ("keyword", "hybrid"):
+    for mode_name in summary.mode_metrics:
         metrics = summary.mode_metrics.get(mode_name)
         if metrics is None:
             continue

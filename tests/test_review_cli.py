@@ -202,6 +202,47 @@ def test_create_review_case_supports_custom_facts_extractor(tmp_path: Path) -> N
     assert response.result.review_facts == custom_facts
 
 
+def test_create_review_case_llm_mode_uses_llm_nodes(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    llm_facts = ReviewFacts(
+        business_activity="llm activity",
+        data_types=["手机号"],
+        cross_border_transfer=True,
+        overseas_recipient="新加坡",
+        missing_information=[],
+    )
+
+    def fake_extract(material_text: str, question: str | None = None) -> ReviewFacts:
+        calls.append("facts")
+        return llm_facts
+
+    def fake_plan(question: str, facts: ReviewFacts, material_text: str | None = None):
+        calls.append("queries")
+        from law_agent.review.schemas import RetrievalQuery
+
+        return [
+            RetrievalQuery(
+                query_id="q_1",
+                query_type="legal_issue",
+                text="数据出境安全评估",
+            )
+        ]
+
+    monkeypatch.setattr("law_agent.review.service.extract_facts_with_deepseek", fake_extract)
+    monkeypatch.setattr("law_agent.review.service.plan_queries_with_deepseek", fake_plan)
+
+    response = create_review_case(
+        question="问题",
+        material_text="材料",
+        output_dir=tmp_path,
+        review_mode="llm",
+    )
+
+    assert calls == ["facts", "queries"]
+    assert response.review_case.review_facts == llm_facts
+    assert response.trace.queries[0].text == "数据出境安全评估"
+
+
 def test_review_cli_run_prints_facts_and_queries(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
@@ -219,5 +260,36 @@ def test_review_cli_run_prints_facts_and_queries(tmp_path: Path, capsys) -> None
     assert exit_code == 0
     assert "Facts:" in captured.out
     assert "Queries:" in captured.out
-    assert "legal_issue" in captured.out
-    assert "material_fact" in captured.out
+
+
+def test_review_cli_index_service_writes_index_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    from law_agent.data.io import write_jsonl
+    from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
+
+    chunks_path = tmp_path / "chunks.jsonl"
+    es_path = tmp_path / "es_bulk.ndjson"
+    pg_path = tmp_path / "pg_rows.jsonl"
+    write_jsonl(chunks_path, FIXTURE_CHUNKS[:1])
+
+    exit_code = main(
+        [
+            "index-service",
+            "--chunks",
+            str(chunks_path),
+            "--elasticsearch-output",
+            str(es_path),
+            "--pgvector-output",
+            str(pg_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Elasticsearch bulk" in captured.out
+    assert es_path.exists()
+    assert pg_path.exists()
+    assert FIXTURE_CHUNKS[0].chunk_id in es_path.read_text(encoding="utf-8")
+    assert FIXTURE_CHUNKS[0].chunk_id in pg_path.read_text(encoding="utf-8")

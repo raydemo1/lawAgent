@@ -22,10 +22,19 @@ Second retrieval:
 
 from __future__ import annotations
 
+import json
+
 from law_agent.data.schemas import Chunk
+from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
+from law_agent.config import require_llm_config
+from law_agent.data.schemas import StrictModel
+from law_agent.review.llm import StructuredLLMNode
+from law_agent.review.query_planner import LLMRetrievalQuery
 from law_agent.review.query_planner import _QueryIdGenerator
 from law_agent.review.schemas import (
     EvidenceIssue,
+    EvidenceIssueType,
+    EvidenceStatus,
     EvidenceSelfCheck,
     ReviewFacts,
     RetrievalHit,
@@ -56,6 +65,26 @@ _CRITICAL_MISSING_FACTS: frozenset[str] = frozenset(
         "data_volume_threshold",
     }
 )
+
+
+class LLMEvidenceIssue(StrictModel):
+    issue_type: EvidenceIssueType
+    description: str
+
+
+class LLMSecondRetrievalPlan(StrictModel):
+    expanded_queries: list[LLMRetrievalQuery]
+    increased_top_k: int
+    stronger_boost: bool
+    reason: str
+
+
+class LLMEvidenceSelfCheck(StrictModel):
+    status: EvidenceStatus
+    issues: list[LLMEvidenceIssue]
+    triggered_reasons: list[str]
+    second_retrieval_triggered: bool
+    second_retrieval_plan: LLMSecondRetrievalPlan | None
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +272,21 @@ def run_self_check(
         i for i in issues if i.issue_type != "critical_facts_missing"
     ]
 
+    # Region-specific and cross-border industry cases benefit from one
+    # controlled supplemental retrieval even when the remaining issue is
+    # missing user facts: the product should show that it checked the
+    # conditional local/industry basis before concluding.
+    if not evidence_issues and has_critical_missing:
+        if facts.region or (facts.industry and facts.cross_border_transfer):
+            plan = build_second_retrieval_plan(issues, facts, triggered_reasons)
+            return EvidenceSelfCheck(
+                status="needs_second_retrieval",
+                issues=issues,
+                triggered_reasons=triggered_reasons,
+                second_retrieval_triggered=False,
+                second_retrieval_plan=plan,
+            )
+
     # If the ONLY issue is critical_facts_missing (evidence is actually good),
     # do NOT abstain — mark as sufficient with a warning. Missing facts is an
     # input quality issue, not an evidence sufficiency issue.
@@ -261,6 +305,125 @@ def run_self_check(
         issues=issues,
         triggered_reasons=triggered_reasons,
         second_retrieval_triggered=False,
+        second_retrieval_plan=plan,
+    )
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek evidence checker
+# ---------------------------------------------------------------------------
+
+def build_evidence_check_messages(
+    hits: list[RetrievalHit],
+    facts: ReviewFacts,
+) -> list[ChatMessage]:
+    """Build a DeepSeek JSON prompt for evidence sufficiency checking."""
+
+    json_example = {
+        "status": "needs_second_retrieval",
+        "issues": [
+            {
+                "issue_type": "no_primary_legal_basis",
+                "description": "检索证据缺少可引用的主要法律依据",
+            }
+        ],
+        "triggered_reasons": ["no_primary_legal_basis"],
+        "second_retrieval_triggered": False,
+        "second_retrieval_plan": {
+            "expanded_queries": [
+                {
+                    "query_type": "legal_issue",
+                    "text": "数据出境安全评估 申报条件 个人信息出境",
+                }
+            ],
+            "increased_top_k": 20,
+            "stronger_boost": True,
+            "reason": "需要补充主要法律依据",
+        },
+    }
+    evidence = [
+        {
+            "chunk_id": hit.chunk_id,
+            "source_id": hit.source_id,
+            "title": hit.title,
+            "text": hit.text[:1200],
+            "citation_role": hit.citation_role,
+            "can_cite_clause": hit.can_cite_clause,
+            "matched_query_type": hit.matched_query_type,
+        }
+        for hit in hits[:12]
+    ]
+    payload = {
+        "review_facts": facts.model_dump(),
+        "evidence": evidence,
+        "json_example": json_example,
+        "instructions": [
+            "判断证据是否足以支持材料驱动合规审查。",
+            "必须输出合法 json object，字段必须与 json_example 完全一致。",
+            "status 只能是 sufficient、needs_second_retrieval 或 insufficient。",
+            "只有 status 为 needs_second_retrieval 时才给 second_retrieval_plan，否则为 null。",
+            "不要输出解释、markdown 或自然语言。",
+        ],
+    }
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是法律合规审查证据自检助手。"
+                "只输出 json，不输出解释、markdown 或自然语言。"
+            ),
+        ),
+        ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+    ]
+
+
+def run_self_check_with_deepseek(
+    hits: list[RetrievalHit],
+    facts: ReviewFacts,
+    chunks_by_id: dict[str, Chunk],
+    *,
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+    trace_id: str | None = None,
+) -> EvidenceSelfCheck:
+    """Run LLM evidence self-check without rule fallback."""
+
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+    node = StructuredLLMNode(
+        node_name="evidence_check",
+        output_model=LLMEvidenceSelfCheck,
+        client=client,
+        max_retries=max_retries,
+        trace_id=trace_id,
+    )
+    output = node.run(build_evidence_check_messages(hits, facts))
+
+    ids = _QueryIdGenerator()
+    plan = None
+    if output.second_retrieval_plan is not None:
+        plan = SecondRetrievalPlan(
+            expanded_queries=[
+                RetrievalQuery(
+                    query_id=ids.next_id(),
+                    query_type=query.query_type,
+                    text=query.text,
+                )
+                for query in output.second_retrieval_plan.expanded_queries
+            ],
+            increased_top_k=output.second_retrieval_plan.increased_top_k,
+            stronger_boost=output.second_retrieval_plan.stronger_boost,
+            reason=output.second_retrieval_plan.reason,
+        )
+
+    return EvidenceSelfCheck(
+        status=output.status,
+        issues=[
+            EvidenceIssue(issue_type=issue.issue_type, description=issue.description)
+            for issue in output.issues
+        ],
+        triggered_reasons=output.triggered_reasons,
+        second_retrieval_triggered=output.second_retrieval_triggered,
         second_retrieval_plan=plan,
     )
 
@@ -351,6 +514,16 @@ def evaluate_after_second_retrieval(
             status="sufficient",
             issues=[],
             triggered_reasons=[],
+            second_retrieval_triggered=True,
+        )
+
+    if new_check.issues and all(
+        issue.issue_type == "critical_facts_missing" for issue in new_check.issues
+    ):
+        return EvidenceSelfCheck(
+            status="sufficient",
+            issues=new_check.issues,
+            triggered_reasons=new_check.triggered_reasons,
             second_retrieval_triggered=True,
         )
 

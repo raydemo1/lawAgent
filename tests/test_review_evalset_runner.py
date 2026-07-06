@@ -12,7 +12,9 @@ from pathlib import Path
 
 from law_agent.data.io import write_jsonl
 from law_agent.review.evalset.cases import get_default_scenarios
-from law_agent.review.evalset.runner import _run_single_case
+from law_agent.review.evalset.metrics import evaluate_case
+from law_agent.review.evalset.runner import _run_single_case, run_evaluation
+import law_agent.review.evalset.runner as runner_module
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
 
@@ -63,3 +65,40 @@ def test_keyword_mode_produces_real_risk_level(tmp_path: Path) -> None:
     # was False because risk_level was stuck on the placeholder.
     assert result.abstention_correct is True
     assert "abstention_incorrect" not in result.bad_reasons
+
+
+def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypatch) -> None:
+    """Eval runner must count citation violations from final citations."""
+
+    chunks_path = _write_fixture_corpus(tmp_path)
+    scenario = [s for s in get_default_scenarios() if not s.should_abstain][0]
+    captured = []
+
+    def spy_evaluate_case(*args, **kwargs):
+        captured.append(kwargs.get("citation_groups"))
+        return evaluate_case(*args, **kwargs)
+
+    monkeypatch.setattr(runner_module, "evaluate_case", spy_evaluate_case)
+
+    _run_single_case(
+        scenario,
+        chunks_path,
+        mode="hybrid",
+        top_k=5,
+    )
+
+    assert captured
+    assert captured[0] is not None
+
+
+def test_service_eval_mode_fails_without_service_adapters(tmp_path: Path) -> None:
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="no fallback to local retrieval"):
+        run_evaluation(
+            chunks_path=chunks_path,
+            scenarios=[get_default_scenarios()[0]],
+            modes=["service"],
+        )

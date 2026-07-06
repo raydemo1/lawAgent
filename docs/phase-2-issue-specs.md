@@ -19,7 +19,7 @@ The slices intentionally start with local CLI/file behavior before API and front
    - Blocked by: Issue 2
    - User stories covered: reviewer can use pasted text as the stable path and PDF/DOCX upload as beta input
 
-4. **Extract review facts and plan retrieval queries**
+4. **Add DeepSeek review fact extraction and query planning**
    - Blocked by: Issue 2
    - User stories covered: reviewer sees the system's understanding of business facts before evidence retrieval
 
@@ -31,15 +31,15 @@ The slices intentionally start with local CLI/file behavior before API and front
    - Blocked by: Issues 4 and 5
    - User stories covered: reviewer gets a richer evidence set than keyword-only search
 
-7. **Add evidence self-check and one controlled second retrieval**
+7. **Add LLM evidence self-check and one controlled second retrieval**
    - Blocked by: Issue 6
    - User stories covered: reviewer sees when evidence is insufficient and whether the system performed a second retrieval
 
-8. **Validate citations and generate structured review results**
+8. **Validate citations and generate LLM structured review results**
    - Blocked by: Issues 4 and 7
    - User stories covered: reviewer gets risk, missing information, recommended actions, risk boundaries, and governed citations
 
-9. **Build scenario golden set and retrieval/citation eval runner**
+9. **Build scenario golden set and local/service/LLM eval runner**
    - Blocked by: Issues 6 and 8
    - User stories covered: project owner can prove hybrid retrieval and citation governance with metrics and bad cases
 
@@ -47,11 +47,11 @@ The slices intentionally start with local CLI/file behavior before API and front
     - Blocked by: Issue 8
     - User stories covered: frontend can call the real review flow instead of mock data
 
-11. **Wire the single-user frontend workbench to the review API**
+11. **Wire the single-user frontend workbench and LLM trace to the review API**
     - Blocked by: Issues 9 and 10
     - User stories covered: reviewer can run a real material review and see evidence, citations, and eval output in the UI
 
-12. **Add pgvector and Elasticsearch adapters behind the local retriever interfaces**
+12. **Add pgvector and Elasticsearch adapters behind the retriever interfaces**
     - Blocked by: Issues 6 and 9
     - User stories covered: project can compare local core behavior with service-backed retrieval
 
@@ -200,11 +200,11 @@ Pasted text is the stable Phase 2 path, while PDF/DOCX upload is a beta path. Bo
 - No complex scanned PDF support guarantee.
 - No file upload HTTP endpoint yet.
 
-## Issue 4: Extract Review Facts and Plan Retrieval Queries
+## Issue 4: Add DeepSeek Review Fact Extraction and Query Planning
 
 ## What to build
 
-Extract fixed `ReviewFacts` from review material and generate typed retrieval queries from the user question plus extracted facts.
+Use DeepSeek to extract fixed `ReviewFacts` from review material and generate typed retrieval queries from the user question plus extracted facts.
 
 ## Why this slice exists
 
@@ -212,15 +212,14 @@ Phase 2 retrieval should not be a raw user-query search. The review facts are th
 
 ## Implementation notes
 
+- Add `law_agent/review/llm.py` for the minimal DeepSeek client wrapper.
 - Add `law_agent/review/facts.py`.
 - Add `law_agent/review/query_planner.py`.
-- Start with a deterministic rules extractor so tests do not depend on LLM:
-  - detect cross-border terms: `境外`, `出境`, country/region names such as `新加坡`, `香港`
-  - detect common data types: `手机号`, `定位`, `设备ID`, `行为日志`, `身份证`, `人脸`
-  - detect sensitive personal information hints: `定位`, `人脸`, `身份证`, `医疗`, `金融账户`
-  - detect industry hints: `汽车`, `智能网联`, `金融信息服务`
-  - detect region hints: `上海`, `广东`, `天津`, `福建`, `广西`, `重庆`, `浙江`, `海南`, `北京`, `深圳`
-- Keep an LLM adapter interface but do not require it for tests.
+- Do not add provider capability fields or multi-provider strategy selection.
+- DeepSeek requests use JSON output style prompts: each prompt must include the word `json` and a target JSON example.
+- Validate LLM output with strict Pydantic models; do not extract JSON with regex, guess fields, or auto-fill missing fields.
+- Failed validation triggers node-level retry; retry exhaustion returns structured `review_failed`.
+- Rule extraction may remain only as an explicit eval baseline, not as online fallback.
 - Suggested query types:
   - `legal_issue`
   - `material_fact`
@@ -242,12 +241,14 @@ Phase 2 retrieval should not be a raw user-query search. The review facts are th
 - Automotive sample extracts industry condition.
 - Regional negative-list sample extracts region.
 - Query planner emits expected query types.
+- Invalid LLM output retries and then returns `review_failed` when attempts are exhausted.
 
 ## Non-goals
 
 - No final legal judgment.
 - No production-grade NER.
-- No mandatory LLM dependency.
+- No rule fallback in online LLM mode.
+- No provider abstraction beyond DeepSeek.
 
 ## Issue 5: Load the Cleaned Corpus and Run Keyword Baseline Retrieval
 
@@ -349,11 +350,11 @@ This is the core Phase 2 retrieval claim. It should be verifiable locally before
 - No Elasticsearch.
 - No reranker.
 
-## Issue 7: Add Evidence Self-Check and One Controlled Second Retrieval
+## Issue 7: Add LLM Evidence Self-Check and One Controlled Second Retrieval
 
 ## What to build
 
-Evaluate retrieved evidence for sufficiency and run at most one controlled second retrieval when evidence is weak or mismatched.
+Use DeepSeek to evaluate retrieved evidence for sufficiency and run at most one controlled second retrieval when evidence is weak or mismatched.
 
 ## Why this slice exists
 
@@ -366,7 +367,10 @@ The project needs Agentic RAG behavior without uncontrolled agent loops. Evidenc
   - `EvidenceStatus`: `sufficient | needs_second_retrieval | insufficient`
   - `EvidenceIssue`
   - `SecondRetrievalPlan`
-- Triggers:
+- The LLM evidence-check prompt must include a target JSON example.
+- Validate the evidence-check output with Pydantic strict schemas.
+- Failed validation triggers node-level retry; retry exhaustion returns structured `review_failed`.
+- Evidence considerations for the LLM checker:
   - no `primary_legal_basis`
   - region facts but no matching local evidence
   - industry facts but no matching industry evidence
@@ -394,17 +398,19 @@ The project needs Agentic RAG behavior without uncontrolled agent loops. Evidenc
 - Region fact without local evidence triggers second retrieval.
 - Missing threshold facts can produce insufficient evidence.
 - Guard that second retrieval count is max one.
+- Invalid evidence-check output retries and then returns `review_failed` when attempts are exhausted.
 
 ## Non-goals
 
 - No autonomous multi-agent loop.
 - No LLM-as-judge.
+- No rule fallback for evidence sufficiency in online LLM mode.
 
-## Issue 8: Validate Citations and Generate Structured Review Results
+## Issue 8: Validate Citations and Generate LLM Structured Review Results
 
 ## What to build
 
-Generate a governed `ReviewResult` from review facts and final evidence, with citation validation that prevents non-citable evidence from being presented as clause-level legal basis.
+Use DeepSeek to generate a governed `ReviewResult` from review facts and final evidence, with citation validation that prevents non-citable evidence from being presented as clause-level legal basis.
 
 ## Why this slice exists
 
@@ -431,11 +437,12 @@ This is where LawAgent stops being raw retrieval and becomes a legal compliance 
   - `medium`
   - `low`
   - `insufficient_evidence`
-- Start with rule-based result building:
-  - cross-border facts + relevant evidence -> medium unless specific high-risk triggers are present
-  - missing threshold/consent/recipient facts -> missing info and risk boundary
-  - insufficient evidence -> abstain
-- Add an optional LLM structured-output adapter later, but keep the rule builder as test fallback.
+- The result-generation prompt must include a target JSON example.
+- Validate the generated `ReviewResult` with Pydantic strict schemas.
+- Citation gate is program-owned: source IDs, chunk IDs, citation roles, and `can_cite_clause` must match retrieved evidence.
+- Failed result schema validation or citation validation triggers node-level retry.
+- Retry exhaustion returns structured `review_failed`.
+- Rule result building may remain only as an explicit eval baseline, not as online fallback.
 
 ## Acceptance criteria
 
@@ -451,17 +458,20 @@ This is where LawAgent stops being raw retrieval and becomes a legal compliance 
 - Grouping by citation role.
 - Insufficient evidence result does not cite weak evidence as legal basis.
 - Cross-border sample produces missing-information actions.
+- Invalid LLM result output retries and then returns `review_failed` when attempts are exhausted.
+- Citation gate failure retries result generation and then returns `review_failed` when attempts are exhausted.
 
 ## Non-goals
 
 - No polished final prose requirement.
 - No freeform LLM answer as the source of truth.
+- No rule fallback in online LLM mode.
 
-## Issue 9: Build Scenario Golden Set and Retrieval/Citation Eval Runner
+## Issue 9: Build Scenario Golden Set and Local/Service/LLM Eval Runner
 
 ## What to build
 
-Create a scenario-based golden set and an eval runner that compares keyword, vector mock, hybrid RRF, and hybrid plus second retrieval on retrieval and citation behavior.
+Create a scenario-based golden set and an eval runner that compares rule baseline, local retrieval, service-backed retrieval, and LLM-owned review behavior.
 
 ## Why this slice exists
 
@@ -494,12 +504,18 @@ Phase 2 must prove the retrieval and citation loop, not just demo one hand-picke
   - abstention accuracy
   - second-retrieval lift
   - citation rule violation count
+- Eval modes:
+  - `rule_baseline`: deterministic rules only, used for comparison
+  - `local`: local hybrid retrieval with the current review flow
+  - `service`: Elasticsearch + pgvector fused retrieval; fail if either backend is unavailable
+  - `llm`: DeepSeek-owned fact extraction, query planning, evidence check, and result generation
 - CLI:
 
 ```powershell
 python -m law_agent.review eval `
   --cases docs/examples/review_scenarios.jsonl `
   --chunks artifacts/review/legal_docs_20260702/chunks.jsonl `
+  --mode llm `
   --output artifacts/eval/review_eval_latest.json
 ```
 
@@ -507,14 +523,18 @@ python -m law_agent.review eval `
 
 - [ ] At least 10 scenario cases exist.
 - [ ] Eval runner emits JSON summary and bad cases.
-- [ ] Metrics compare at least keyword-only and hybrid modes.
+- [ ] Metrics compare at least `rule_baseline`, `local`, and `llm` modes.
+- [ ] `service` mode is available when Elasticsearch and pgvector are configured, and fails clearly when either is unavailable.
 - [ ] Citation violations are counted.
+- [ ] `review_failed` cases are counted separately from `insufficient_evidence`.
 
 ## Tests
 
 - Metrics unit tests with small fake ranked lists.
 - Bad case output includes expected and actual sources.
 - Eval runner works with a tiny fixture corpus.
+- Eval runner mode selection tests.
+- LLM workflow failures are reported as `review_failed`, not as abstention.
 
 ## Non-goals
 
@@ -540,8 +560,10 @@ The frontend should connect to the actual review loop. The original spec preferr
 - Endpoints:
   - `POST /api/review`
     - input: `ReviewRequest` (`question: str`, `material_text: str`)
-    - output: `ReviewResponse` (includes `review_case_id`, `trace_id`, `review_facts`, `review_result`, `evidence_self_check`, `citation_groups`)
-    - Internally calls `create_review_case` + `run_hybrid_retrieval`, same service functions used by CLI.
+    - output: `ReviewResponse` or structured `review_failed`
+    - success output includes `review_case_id`, `trace_id`, `review_facts`, `review_result`, `evidence_self_check`, and `citation_groups`
+    - `review_failed` output includes only `status`, `failed_node`, `reason`, `message`, `attempts`, and `trace_id`
+    - Internally calls the same review workflow used by CLI.
   - `GET /api/eval/latest`
     - output: latest `EvalSummary` JSON if a cached eval result exists, else `404`.
   - `POST /api/eval/run`
@@ -553,7 +575,8 @@ The frontend should connect to the actual review loop. The original spec preferr
 - Structured JSON error responses via FastAPI exception handlers:
   - `422` for validation errors (FastAPI default).
   - `400` for business logic errors (blank question, missing material, etc.).
-  - `500` for unexpected errors with a generic message.
+  - `500` for unexpected service code errors before or outside the review workflow.
+- Once the review workflow has started, LLM node failures, citation retry exhaustion, and other workflow failures return HTTP 200 with structured `review_failed` so the frontend and eval runner can keep trace context.
 - Keep API layer thin: all business logic stays in `service.py`.
 - Add `serve` subcommand to CLI: `python -m law_agent.review serve --host 127.0.0.1 --port 8000`.
 - Document the startup command in the spec.
@@ -561,7 +584,8 @@ The frontend should connect to the actual review loop. The original spec preferr
 ## Acceptance criteria
 
 - [ ] `python -m law_agent.review serve` starts a local FastAPI server.
-- [ ] `POST /api/review` returns structured JSON with trace ID, review facts, review result, evidence self-check, and citation groups.
+- [ ] `POST /api/review` returns structured JSON with trace ID, review facts, review result, evidence self-check, and citation groups on success.
+- [ ] Workflow failures return structured `review_failed` with the minimal fields and trace ID.
 - [ ] `GET /api/eval/latest` returns the latest eval summary or 404.
 - [ ] `POST /api/eval/run` triggers evaluation and returns the summary.
 - [ ] API errors are structured JSON with `detail` field.
@@ -572,6 +596,7 @@ The frontend should connect to the actual review loop. The original spec preferr
 
 - Unit test the API using FastAPI `TestClient` (from `fastapi.testclient`).
 - Test `POST /api/review` with valid input returns 200 and structured response.
+- Test LLM workflow failure returns 200 and structured `review_failed`.
 - Test `POST /api/review` with blank question returns 400.
 - Test `GET /api/eval/latest` returns 404 when no eval has been run.
 - Test `POST /api/eval/run` returns eval summary.
@@ -584,11 +609,11 @@ The frontend should connect to the actual review loop. The original spec preferr
 - No async job queue — review runs synchronously.
 - No WebSocket for streaming (future enhancement).
 
-## Issue 11: Wire the Single-User Frontend Workbench to the Review API
+## Issue 11: Wire the Single-User Frontend Workbench and LLM Trace to the Review API
 
 ## What to build
 
-Connect the current Superhost/frontend mock or a minimal checked-in frontend shell to the local review API, showing real review facts, structured result, evidence status, citations, missing information, and eval output.
+Connect the current Superhost/frontend mock or a minimal checked-in frontend shell to the local review API, showing real review facts, LLM trace, structured result, evidence status, citations, missing information, and eval output.
 
 ## Why this slice exists
 
@@ -605,20 +630,24 @@ Phase 2 should be demoable by a user, not just through CLI output.
   - question input
   - pasted material input
   - optional file path/upload beta control
-  - extracted facts panel
+  - LLM fact understanding panel
+  - query plan panel
+  - evidence summary panel
+  - second retrieval panel
   - structured review result
-  - evidence status and second retrieval badge
   - grouped citations
   - missing information and recommended actions
+  - `review_failed` state with failed node, message, attempts, and trace ID
   - latest eval metrics and bad cases
-- Do not expose chunk debug, embedding vectors, or cleaning pipeline internals.
+- Do not expose raw prompts, raw model output, validation errors, token usage, chunk debug, embedding vectors, or cleaning pipeline internals by default.
 
 ## Acceptance criteria
 
 - [ ] User can submit pasted material and question from the UI.
-- [ ] UI calls real `POST /review`.
-- [ ] UI displays `ReviewFacts` and structured result.
+- [ ] UI calls real `POST /api/review`.
+- [ ] UI displays LLM fact understanding, query plan, evidence summary, second retrieval status, and structured result.
 - [ ] UI displays grouped citations and evidence status.
+- [ ] UI displays structured `review_failed` without pretending it is insufficient evidence.
 - [ ] UI can show latest eval metrics.
 
 ## Tests
@@ -633,11 +662,11 @@ Phase 2 should be demoable by a user, not just through CLI output.
 - No knowledge-base admin.
 - No parser-quality correction UI.
 
-## Issue 12: Add pgvector and Elasticsearch Adapters Behind the Local Retriever Interfaces
+## Issue 12: Add pgvector and Elasticsearch Adapters Behind the Retriever Interfaces
 
 ## What to build
 
-Implement service-backed retrieval adapters for PostgreSQL/pgvector and Elasticsearch behind the same retriever interfaces used by the local hybrid core, then compare eval results against the local core.
+Implement service-backed retrieval adapters for PostgreSQL/pgvector and Elasticsearch behind the same retriever interfaces used by the local hybrid core, add index scripts, then compare eval results against the local and LLM modes.
 
 ## Why this slice exists
 
@@ -646,6 +675,9 @@ The target architecture is dual retrieval storage, but service integration shoul
 ## Implementation notes
 
 - Keep local retriever as baseline.
+- `service` retrieval mode means Elasticsearch and pgvector are both available and fused.
+- If either Elasticsearch or pgvector is unavailable in `service` mode, fail clearly instead of falling back to local or single-route retrieval.
+- Optional `elasticsearch_only` and `pgvector_only` modes may exist only as explicit diagnostics/ablation modes.
 - Add adapter interfaces before concrete clients if they are not already extracted:
   - `KeywordSearchAdapter`
   - `VectorSearchAdapter`
@@ -657,7 +689,7 @@ The target architecture is dual retrieval storage, but service integration shoul
   - upsert chunk metadata and text
   - upsert embeddings for vector search when embedding provider is configured
   - index text and metadata into Elasticsearch
-- Reuse the same eval runner to compare local and service modes.
+- Reuse the same eval runner to compare `local`, `service`, and `llm` modes.
 
 ## Acceptance criteria
 
@@ -665,6 +697,8 @@ The target architecture is dual retrieval storage, but service integration shoul
 - [ ] pgvector adapter can return vector hits for a tiny test index or mocked client.
 - [ ] Elasticsearch adapter can return keyword hits for a tiny test index or mocked client.
 - [ ] Eval runner supports backend selection.
+- [ ] `service` mode fails clearly when only one service backend is configured.
+- [ ] Index scripts can load the review corpus chunks into both pgvector/PostgreSQL metadata tables and Elasticsearch.
 - [ ] Documentation explains required services and env vars.
 
 ## Tests
@@ -672,6 +706,7 @@ The target architecture is dual retrieval storage, but service integration shoul
 - Mock adapter tests without running external services.
 - Optional integration tests gated behind env vars.
 - Eval runner backend selection tests.
+- Service mode fail-fast tests for missing ES or missing pgvector config.
 
 ## Non-goals
 

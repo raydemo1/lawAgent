@@ -27,6 +27,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             question=args.question,
             material=material,
             output_dir=Path(args.output_dir),
+            review_mode=args.mode,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -62,6 +63,7 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
                 chunks_path=Path(args.chunks),
                 output_dir=Path(args.output_dir),
                 top_k=args.top_k,
+                review_mode=args.mode,
             )
         else:
             trace = run_keyword_retrieval(
@@ -156,6 +158,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         summary = run_evaluation(
             chunks_path=Path(args.chunks),
             top_k=args.top_k,
+            modes=args.mode,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -189,11 +192,12 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     from law_agent.review.api import create_app
 
-    app = create_app(chunks_path=Path(args.chunks))
+    app = create_app(chunks_path=Path(args.chunks), review_mode=args.mode)
 
     print(f"Starting LawAgent Review API at http://{args.host}:{args.port}")
     print(f"  OpenAPI docs: http://{args.host}:{args.port}/docs")
     print(f"  Corpus: {args.chunks}")
+    print(f"  Review mode: {args.mode}")
     print("  Press Ctrl+C to stop")
 
     uvicorn.run(
@@ -202,6 +206,31 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         port=args.port,
         reload=args.reload,
     )
+    return 0
+
+
+def _cmd_index_service(args: argparse.Namespace) -> int:
+    from law_agent.review.retrieval.indexing import (
+        write_elasticsearch_bulk_file,
+        write_pgvector_rows_file,
+    )
+
+    try:
+        es_path = write_elasticsearch_bulk_file(
+            chunks_path=Path(args.chunks),
+            output_path=Path(args.elasticsearch_output),
+            index_name=args.elasticsearch_index,
+        )
+        pg_path = write_pgvector_rows_file(
+            chunks_path=Path(args.chunks),
+            output_path=Path(args.pgvector_output),
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Wrote Elasticsearch bulk file: {es_path}")
+    print(f"Wrote pgvector rows file: {pg_path}")
     return 0
 
 
@@ -221,6 +250,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parser used for --material-file. Pasted text ignores this option.",
     )
     run.add_argument("--output-dir", default=str(DEFAULT_REVIEW_RUNS_DIR))
+    run.add_argument(
+        "--mode",
+        choices=["rule_baseline", "llm"],
+        default="rule_baseline",
+        help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
+    )
     run.set_defaults(func=_cmd_run)
 
     retrieve = subparsers.add_parser(
@@ -239,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run hybrid retrieval (keyword + vector_mock + RRF + neighbors)",
     )
+    retrieve.add_argument(
+        "--mode",
+        choices=["rule_baseline", "llm"],
+        default="rule_baseline",
+        help="Review owner mode for hybrid evidence/result nodes.",
+    )
     retrieve.set_defaults(func=_cmd_retrieve)
 
     eval_parser = subparsers.add_parser(
@@ -250,6 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to chunks.jsonl corpus file",
     )
     eval_parser.add_argument("--top-k", type=int, default=10)
+    eval_parser.add_argument(
+        "--mode",
+        action="append",
+        choices=["rule_baseline", "local", "service", "llm", "keyword", "hybrid"],
+        default=None,
+        help="Eval mode to run. Repeat for multiple modes. Defaults to rule_baseline and local.",
+    )
     eval_parser.add_argument(
         "--output",
         default=None,
@@ -281,7 +329,39 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable auto-reload for development",
     )
+    serve.add_argument(
+        "--mode",
+        choices=["rule_baseline", "llm"],
+        default="rule_baseline",
+        help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
+    )
     serve.set_defaults(func=_cmd_serve)
+
+    index_service = subparsers.add_parser(
+        "index-service",
+        help="Build service retrieval index artifacts for ES and pgvector",
+    )
+    index_service.add_argument(
+        "--chunks",
+        default=str(DEFAULT_CHUNKS_PATH),
+        help="Path to chunks.jsonl corpus file",
+    )
+    index_service.add_argument(
+        "--elasticsearch-index",
+        default="lawagent_chunks",
+        help="Target Elasticsearch index name for bulk actions",
+    )
+    index_service.add_argument(
+        "--elasticsearch-output",
+        required=True,
+        help="Output path for Elasticsearch bulk NDJSON",
+    )
+    index_service.add_argument(
+        "--pgvector-output",
+        required=True,
+        help="Output path for pgvector JSONL rows",
+    )
+    index_service.set_defaults(func=_cmd_index_service)
 
     return parser
 

@@ -52,6 +52,10 @@ _Avoid_: 只展示最终 chunk, 不可解释清洗
 第一版采用的在线问答形态，用显式工作流节点完成意图识别、查询改写、混合检索、证据自检、二次召回、引用校验和拒答，而不是让多个自治 Agent 自由对话。
 _Avoid_: 真多 Agent, 角色扮演式 Agent 协作, 黑盒工具调用
 
+**LLM-owned Review Workflow**:
+材料驱动合规审查的 LLM 主导形态。审查事实抽取、query planning、证据自检和结构化审查结果由 LLM 节点负责；程序负责 schema 校验、引用门禁、trace、检索后端调用和错误上抛。当前实现先只接入 DeepSeek，不引入多 provider 能力字段；每个 LLM 节点 prompt 必须给出目标 JSON 示例，LLM 输出按 JSON prompt 约束后直接走 Pydantic 严格校验和节点级 retry。LLM 节点可以按配置重试，但重试耗尽后必须显式失败，不用规则路径静默兜底。第一版节点顺序固定为：fact extraction、query planning、retrieval、evidence check、可选 supplemental retrieval、result generation、citation gate；不要再拆出独立 risk classifier、missing info detector 或 recommendation generator。
+_Avoid_: 规则隐性 fallback, 模型失败后继续产出伪结果, 把规则判断混进线上 LLM 模式
+
 **二次召回**:
 LawAgent 第一版必须突出的 Agentic RAG 能力，指系统在首次检索后判断证据不足时，受控地改写查询、扩大召回或切换检索策略，再执行一次补充检索。
 _Avoid_: 无限循环检索, 单次普通 RAG, 无条件扩大 TopK
@@ -59,6 +63,14 @@ _Avoid_: 无限循环检索, 单次普通 RAG, 无条件扩大 TopK
 **证据自检**:
 回答生成前的判断步骤，用于检查检索证据是否足够、是否命中正确主题、是否支持用户问题，并决定直接回答、二次召回或拒答。
 _Avoid_: 生成后才补引用, 无依据生成
+
+**证据不足审查结果**:
+LLM-owned Review Workflow 正常完成后给出的业务结论，表示当前材料、检索证据或二次召回后的证据仍不足以支持确定审查判断，需要用户补充事实或依据。它是有效的 ReviewResult，而不是系统故障。
+_Avoid_: 模型调用失败, schema 校验失败, 检索服务不可用
+
+**审查流程失败**:
+系统无法产出可信 ReviewResult 的故障状态，例如 LLM 多次输出不合格、模型 API 超时、检索后端不可用、引用校验重试耗尽。它必须显式暴露给用户和 trace，不能伪装成证据不足审查结果。若 workflow 已经开始，节点级失败应以结构化 `review_failed` 响应返回，而不是仅以 HTTP 500/502 中断。`review_failed` 响应只保留最小字段：状态、失败节点、失败原因、用户可读说明、尝试次数和 trace id；raw output、validation errors、token usage、latency 等细节放入后端 trace。
+_Avoid_: 业务证据不足, 用户材料缺信息, 合法拒答
 
 **高精度混合检索**:
 LawAgent 第一版的检索主线，结合向量检索、关键词检索、RRF 融合、可选精排和父文档补充，目标是提高法规政策问题的正确依据命中率。
