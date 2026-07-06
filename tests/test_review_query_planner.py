@@ -1,0 +1,209 @@
+"""Tests for deterministic retrieval query planning (Issue 4)."""
+
+from law_agent.review.facts import extract_facts
+from law_agent.review.query_planner import plan_queries
+from law_agent.review.schemas import ReviewFacts
+
+
+def _query_types(queries) -> list[str]:
+    return [q.query_type for q in queries]
+
+
+# ---------------------------------------------------------------------------
+# Legal issue query
+# ---------------------------------------------------------------------------
+
+def test_legal_issue_query_always_present() -> None:
+    facts = ReviewFacts()
+    queries = plan_queries("是否需要数据出境安全评估？", facts)
+
+    assert len(queries) >= 1
+    assert queries[0].query_type == "legal_issue"
+    assert queries[0].text == "是否需要数据出境安全评估？"
+
+
+def test_empty_facts_produces_only_legal_issue_and_missing() -> None:
+    facts = ReviewFacts()
+    queries = plan_queries("问题", facts)
+
+    types = _query_types(queries)
+    assert "legal_issue" in types
+    assert "material_fact" not in types
+    assert "region_condition" not in types
+    assert "industry_condition" not in types
+
+
+# ---------------------------------------------------------------------------
+# Material fact query
+# ---------------------------------------------------------------------------
+
+def test_material_fact_query_with_cross_border_facts() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        data_types=["手机号", "定位信息"],
+        overseas_recipient="新加坡",
+    )
+    queries = plan_queries("是否需要数据出境安全评估？", facts)
+
+    material_queries = [q for q in queries if q.query_type == "material_fact"]
+    assert len(material_queries) == 1
+    text = material_queries[0].text
+    assert "数据出境" in text
+    assert "手机号" in text
+    assert "定位信息" in text
+    assert "新加坡" in text
+
+
+def test_material_fact_query_with_sensitive_info() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        data_types=["人脸信息"],
+        sensitive_personal_info=True,
+    )
+    queries = plan_queries("问题", facts)
+
+    material_queries = [q for q in queries if q.query_type == "material_fact"]
+    assert len(material_queries) == 1
+    assert "敏感个人信息" in material_queries[0].text
+
+
+def test_no_material_fact_query_without_facts() -> None:
+    facts = ReviewFacts()
+    queries = plan_queries("问题", facts)
+
+    assert "material_fact" not in _query_types(queries)
+
+
+# ---------------------------------------------------------------------------
+# Region condition query
+# ---------------------------------------------------------------------------
+
+def test_region_query_when_region_set() -> None:
+    facts = ReviewFacts(region="上海")
+    queries = plan_queries("问题", facts)
+
+    region_queries = [q for q in queries if q.query_type == "region_condition"]
+    assert len(region_queries) == 1
+    assert "上海" in region_queries[0].text
+    assert "负面清单" in region_queries[0].text
+
+
+def test_no_region_query_when_region_absent() -> None:
+    facts = ReviewFacts()
+    queries = plan_queries("问题", facts)
+
+    assert "region_condition" not in _query_types(queries)
+
+
+# ---------------------------------------------------------------------------
+# Industry condition query
+# ---------------------------------------------------------------------------
+
+def test_industry_query_when_industry_set() -> None:
+    facts = ReviewFacts(industry="智能网联汽车")
+    queries = plan_queries("问题", facts)
+
+    industry_queries = [q for q in queries if q.query_type == "industry_condition"]
+    assert len(industry_queries) == 1
+    assert "智能网联汽车" in industry_queries[0].text
+    assert "安全管理" in industry_queries[0].text
+
+
+def test_no_industry_query_when_industry_absent() -> None:
+    facts = ReviewFacts()
+    queries = plan_queries("问题", facts)
+
+    assert "industry_condition" not in _query_types(queries)
+
+
+# ---------------------------------------------------------------------------
+# Missing information queries
+# ---------------------------------------------------------------------------
+
+def test_missing_information_queries_for_each_missing_fact() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        missing_information=[
+            "overseas_recipient",
+            "legal_basis_or_consent",
+            "data_volume_threshold",
+        ],
+    )
+    queries = plan_queries("问题", facts)
+
+    missing_queries = [q for q in queries if q.query_type == "missing_information"]
+    assert len(missing_queries) == 3
+    texts = [q.text for q in missing_queries]
+    assert any("境外接收方" in t for t in texts)
+    assert any("同意" in t for t in texts)
+    assert any("阈值" in t for t in texts)
+
+
+def test_no_missing_queries_when_nothing_missing() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        data_types=["手机号"],
+        overseas_recipient="新加坡",
+        processing_purpose="推荐",
+        legal_basis_or_consent="用户同意",
+        missing_information=[],
+    )
+    queries = plan_queries("问题", facts)
+
+    assert "missing_information" not in _query_types(queries)
+
+
+# ---------------------------------------------------------------------------
+# Integration with extract_facts
+# ---------------------------------------------------------------------------
+
+def test_cross_border_sample_produces_multiple_query_types() -> None:
+    material = "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。"
+    question = "这个场景是否需要数据出境安全评估？"
+    facts = extract_facts(material)
+    queries = plan_queries(question, facts, material)
+
+    types = _query_types(queries)
+    assert "legal_issue" in types
+    assert "material_fact" in types
+    assert "missing_information" in types
+    assert len(queries) >= 3
+
+
+def test_automotive_sample_produces_industry_query() -> None:
+    material = "智能网联汽车采集车辆位置和行驶轨迹数据，需进行数据出境安全评估。"
+    facts = extract_facts(material)
+    queries = plan_queries("汽车数据出境合规要求？", facts, material)
+
+    types = _query_types(queries)
+    assert "industry_condition" in types
+    assert "material_fact" in types
+
+
+def test_regional_sample_produces_region_query() -> None:
+    material = "公司在上海自贸区开展业务，涉及数据出境。"
+    facts = extract_facts(material)
+    queries = plan_queries("上海数据出境负面清单要求？", facts, material)
+
+    types = _query_types(queries)
+    assert "region_condition" in types
+
+
+# ---------------------------------------------------------------------------
+# Query ID determinism
+# ---------------------------------------------------------------------------
+
+def test_query_ids_are_unique_and_sequential() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        data_types=["手机号"],
+        overseas_recipient="新加坡",
+        region="上海",
+        industry="汽车",
+        missing_information=["legal_basis_or_consent"],
+    )
+    queries = plan_queries("问题", facts)
+
+    ids = [q.query_id for q in queries]
+    assert len(ids) == len(set(ids))
+    assert ids[0] == "q_1"

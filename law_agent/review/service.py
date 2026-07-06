@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from law_agent.review.facts import FactsExtractor, extract_facts
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
     review_cases_path,
@@ -15,6 +16,7 @@ from law_agent.review.io import (
     write_retrieval_traces,
 )
 from law_agent.review.materials import material_from_text
+from law_agent.review.query_planner import QueryPlanner, plan_queries
 from law_agent.review.schemas import (
     EvidenceSelfCheck,
     MaterialRecord,
@@ -22,6 +24,7 @@ from law_agent.review.schemas import (
     ReviewFacts,
     ReviewResult,
     ReviewRunResponse,
+    RetrievalQuery,
     RetrievalTrace,
 )
 
@@ -43,8 +46,17 @@ def create_review_case(
     output_dir: Path = DEFAULT_REVIEW_RUNS_DIR,
     now: Callable[[], str] = utc_now_iso,
     id_factory: Callable[[str], str] = make_id,
+    facts_extractor: FactsExtractor = extract_facts,
+    query_planner: QueryPlanner = plan_queries,
 ) -> ReviewRunResponse:
-    """Create and persist a review case skeleton."""
+    """Create and persist a review case with extracted facts and planned queries.
+
+    Issue 4 integration: facts are extracted from the material text and typed
+    retrieval queries are planned from the question plus facts. Both are
+    persisted into the review case and retrieval trace. Evidence retrieval,
+    self-check, and result generation remain placeholder states for later
+    issues.
+    """
 
     question = _validate_non_blank(question, "question")
     if material is None:
@@ -58,7 +70,9 @@ def create_review_case(
     review_case_id = id_factory("review")
     trace_id = id_factory("trace")
     review_result_id = id_factory("result")
-    facts = ReviewFacts()
+
+    facts = facts_extractor(material.material_text, question)
+    queries: list[RetrievalQuery] = query_planner(question, facts, material.material_text)
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -82,6 +96,7 @@ def create_review_case(
         review_case_id=review_case_id,
         created_at=created_at,
         evidence_self_check=EvidenceSelfCheck(status="not_checked"),
+        queries=queries,
     )
 
     case_path = review_cases_path(output_dir)
