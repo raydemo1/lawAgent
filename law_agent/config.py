@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 def load_env_file(path: str | Path = ".env") -> None:
@@ -60,4 +61,118 @@ def require_llm_config() -> LLMConfig:
         raise RuntimeError("OPENAI_COMPATIBLE_API_KEY is required")
     if not config.model:
         raise RuntimeError("OPENAI_COMPATIBLE_MODEL is required")
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Service retrieval configuration (Elasticsearch + pgvector + embeddings)
+# ---------------------------------------------------------------------------
+
+EmbeddingProvider = Literal["openai_compatible", "sentence_transformers", "mock"]
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """Configuration for the embedding provider used by pgvector indexing.
+
+    Kept separate from ``LLMConfig`` because the chat provider (DeepSeek) does
+    not expose an embeddings endpoint; embeddings may come from a different
+    OpenAI-compatible host, a local sentence-transformers model, or a
+    deterministic mock for tests.
+    """
+
+    provider: EmbeddingProvider
+    base_url: str
+    api_key: str | None
+    model: str
+    dimension: int
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class ElasticsearchConfig:
+    url: str
+    index_name: str
+    api_key: str | None
+    verify_certs: bool
+
+
+@dataclass(frozen=True)
+class PostgresConfig:
+    dsn: str
+    table_name: str
+
+
+@dataclass(frozen=True)
+class ServiceConfig:
+    """Full service retrieval configuration (ES + pgvector + embeddings)."""
+
+    elasticsearch: ElasticsearchConfig
+    postgres: PostgresConfig
+    embedding: EmbeddingConfig
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.elasticsearch.url and self.postgres.dsn)
+
+
+def _load_embedding_config() -> EmbeddingConfig:
+    load_env_file()
+    provider = os.getenv("EMBEDDING_PROVIDER", "openai_compatible")
+    if provider not in ("openai_compatible", "sentence_transformers", "mock"):
+        raise RuntimeError(
+            f"EMBEDDING_PROVIDER={provider!r} is not supported; "
+            "use openai_compatible, sentence_transformers, or mock"
+        )
+    return EmbeddingConfig(
+        provider=provider,
+        base_url=os.getenv("EMBEDDING_BASE_URL", "https://api.openai.com").rstrip("/"),
+        api_key=os.getenv("EMBEDDING_API_KEY") or None,
+        model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        dimension=int(os.getenv("EMBEDDING_DIM", "1536")),
+        timeout_seconds=int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "60")),
+    )
+
+
+def load_service_config() -> ServiceConfig:
+    """Load service retrieval settings from environment variables."""
+
+    load_env_file()
+    es = ElasticsearchConfig(
+        url=os.getenv("ES_URL", "http://localhost:9200").rstrip("/"),
+        index_name=os.getenv("ES_INDEX", "lawagent_chunks"),
+        api_key=os.getenv("ES_API_KEY") or None,
+        verify_certs=os.getenv("ES_VERIFY_CERTS", "true").lower() == "true",
+    )
+    pg = PostgresConfig(
+        dsn=os.getenv(
+            "PG_DSN", "postgresql://lawagent:lawagent@localhost:5432/lawagent"
+        ),
+        table_name=os.getenv("PG_TABLE", "lawagent_chunks"),
+    )
+    return ServiceConfig(
+        elasticsearch=es,
+        postgres=pg,
+        embedding=_load_embedding_config(),
+    )
+
+
+def require_service_config() -> ServiceConfig:
+    """Load service settings and fail if mandatory values are missing.
+
+    Mirrors the fail-fast semantics of ``require_service_adapters``: service
+    retrieval must not silently fall back to local retrieval.
+    """
+
+    config = load_service_config()
+    if not config.elasticsearch.url:
+        raise RuntimeError("ES_URL is required for service retrieval")
+    if not config.postgres.dsn:
+        raise RuntimeError("PG_DSN is required for service retrieval")
+    if config.embedding.provider == "openai_compatible" and not config.embedding.api_key:
+        raise RuntimeError(
+            "EMBEDDING_API_KEY is required when EMBEDDING_PROVIDER=openai_compatible"
+        )
+    if config.embedding.provider == "sentence_transformers" and not config.embedding.model:
+        raise RuntimeError("EMBEDDING_MODEL is required for sentence_transformers provider")
     return config

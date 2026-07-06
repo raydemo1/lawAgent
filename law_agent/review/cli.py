@@ -57,7 +57,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 def _cmd_retrieve(args: argparse.Namespace) -> int:
     try:
-        if args.hybrid:
+        if args.service:
+            from law_agent.review.service import run_service_retrieval
+
+            trace = run_service_retrieval(
+                case_id=args.case_id,
+                chunks_path=Path(args.chunks),
+                output_dir=Path(args.output_dir),
+                top_k=args.top_k,
+                review_mode=args.mode,
+            )
+        elif args.hybrid:
             trace = run_hybrid_retrieval(
                 case_id=args.case_id,
                 chunks_path=Path(args.chunks),
@@ -79,8 +89,10 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
     print(f"Retrieved evidence for case {trace.review_case_id}")
     print(f"Trace {trace.trace_id}")
     print(f"Keyword hits: {len(trace.keyword_results)}")
-    if args.hybrid:
-        print(f"Vector mock hits: {len(trace.vector_results)}")
+    hybrid_style = args.hybrid or args.service
+    if hybrid_style:
+        vector_label = "pgvector" if args.service else "Vector mock"
+        print(f"{vector_label} hits: {len(trace.vector_results)}")
         print(f"Hybrid (RRF) hits: {len(trace.hybrid_results)}")
         print(f"Neighbor chunks: {len(trace.neighbor_chunks)}")
         if trace.metadata_boosts:
@@ -114,7 +126,7 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
         print(f"      {hit.title[:60]}")
 
     # Issue 8: Display structured review result
-    if args.hybrid:
+    if hybrid_style:
         from law_agent.review.io import read_review_results
 
         results_path = Path(args.output_dir) / "review_results.jsonl"
@@ -216,22 +228,54 @@ def _cmd_index_service(args: argparse.Namespace) -> int:
     )
 
     try:
-        es_path = write_elasticsearch_bulk_file(
-            chunks_path=Path(args.chunks),
-            output_path=Path(args.elasticsearch_output),
-            index_name=args.elasticsearch_index,
-        )
-        pg_path = write_pgvector_rows_file(
-            chunks_path=Path(args.chunks),
-            output_path=Path(args.pgvector_output),
-        )
+        if args.execute:
+            from law_agent.config import require_service_config
+            from law_agent.review.retrieval.corpus import load_corpus
+            from law_agent.review.retrieval.service_backends import index_corpus_to_services
+
+            config = require_service_config()
+            chunks = load_corpus(args.chunks)
+            summary = index_corpus_to_services(config, chunks)
+            print("Indexed corpus into Elasticsearch + pgvector:")
+            for key, value in summary.items():
+                print(f"  {key}: {value}")
+
+        if args.elasticsearch_output:
+            es_path = write_elasticsearch_bulk_file(
+                chunks_path=Path(args.chunks),
+                output_path=Path(args.elasticsearch_output),
+                index_name=args.elasticsearch_index,
+            )
+            print(f"Wrote Elasticsearch bulk file: {es_path}")
+        if args.pgvector_output:
+            pg_path = write_pgvector_rows_file(
+                chunks_path=Path(args.chunks),
+                output_path=Path(args.pgvector_output),
+            )
+            print(f"Wrote pgvector rows file: {pg_path}")
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    print(f"Wrote Elasticsearch bulk file: {es_path}")
-    print(f"Wrote pgvector rows file: {pg_path}")
     return 0
+
+
+def _cmd_service_doctor(args: argparse.Namespace) -> int:
+    from law_agent.config import require_service_config
+    from law_agent.review.retrieval.service_backends import healthcheck
+
+    try:
+        config = require_service_config()
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    result = healthcheck(config)
+    print("Service retrieval healthcheck:")
+    for key, value in result.items():
+        print(f"  {key}: {value}")
+    ok = result.get("elasticsearch") and result.get("postgres")
+    return 0 if ok else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -273,6 +317,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--hybrid",
         action="store_true",
         help="Run hybrid retrieval (keyword + vector_mock + RRF + neighbors)",
+    )
+    retrieve.add_argument(
+        "--service",
+        action="store_true",
+        help="Run service retrieval backed by real Elasticsearch + pgvector "
+        "(requires ES_URL, PG_DSN, and embedding config in the environment).",
     )
     retrieve.add_argument(
         "--mode",
@@ -353,15 +403,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     index_service.add_argument(
         "--elasticsearch-output",
-        required=True,
-        help="Output path for Elasticsearch bulk NDJSON",
+        default=None,
+        help="Output path for Elasticsearch bulk NDJSON (optional artifact file)",
     )
     index_service.add_argument(
         "--pgvector-output",
-        required=True,
-        help="Output path for pgvector JSONL rows",
+        default=None,
+        help="Output path for pgvector JSONL rows (optional artifact file)",
+    )
+    index_service.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute real import into Elasticsearch + pgvector "
+        "(requires ES_URL, PG_DSN, and embedding config in the environment).",
     )
     index_service.set_defaults(func=_cmd_index_service)
+
+    doctor = subparsers.add_parser(
+        "service-doctor",
+        help="Check Elasticsearch + pgvector reachability for service retrieval",
+    )
+    doctor.set_defaults(func=_cmd_service_doctor)
 
     return parser
 

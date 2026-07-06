@@ -29,6 +29,10 @@ from law_agent.review.retrieval.boosts import (
     apply_boosts_to_hits,
     compute_boosts_summary,
 )
+from law_agent.review.retrieval.adapters import (
+    KeywordSearchAdapter,
+    VectorSearchAdapter,
+)
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, CorpusError, load_corpus
 from law_agent.review.retrieval.fusion import rrf_fuse
 from law_agent.review.retrieval.keyword import KeywordRetriever, merge_hits_by_chunk_id
@@ -416,12 +420,19 @@ def run_hybrid_retrieval(
     top_k: int = DEFAULT_TOP_K,
     max_neighbors: int = DEFAULT_NEIGHBOR_COUNT,
     review_mode: ReviewMode = "rule_baseline",
+    keyword_retriever: KeywordSearchAdapter | None = None,
+    vector_retriever: VectorSearchAdapter | None = None,
 ) -> RetrievalTrace:
     """Run hybrid retrieval for an existing review case.
 
     Combines keyword and vector_mock retrievers, applies metadata boosts
     based on ``ReviewFacts``, fuses with RRF, and expands neighbor chunks.
     Persists all component results and the fused result to the trace.
+
+    ``keyword_retriever`` / ``vector_retriever`` may be injected to back the
+    two retrieval routes with service adapters (Elasticsearch / pgvector)
+    instead of the local in-memory retrievers. When omitted, the local
+    ``KeywordRetriever`` and ``VectorMockRetriever`` are used.
     """
 
     case, target_trace, traces = _load_case_and_trace(case_id, output_dir)
@@ -431,8 +442,10 @@ def run_hybrid_retrieval(
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
     candidate_top_k = max(top_k, 100)
 
-    keyword_retriever = KeywordRetriever(chunks)
-    vector_retriever = VectorMockRetriever(chunks)
+    if keyword_retriever is None:
+        keyword_retriever = KeywordRetriever(chunks)
+    if vector_retriever is None:
+        vector_retriever = VectorMockRetriever(chunks)
 
     # Run both retrievers per query and merge
     keyword_hits_per_query: list[list[RetrievalHit]] = []
@@ -610,3 +623,59 @@ def run_hybrid_retrieval(
     write_review_results(results_path, updated_results)
 
     return updated_trace
+
+
+# ---------------------------------------------------------------------------
+# Service mode: real Elasticsearch + pgvector hybrid retrieval
+# ---------------------------------------------------------------------------
+
+def run_service_retrieval(
+    *,
+    case_id: str,
+    chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
+    output_dir: Path = DEFAULT_REVIEW_RUNS_DIR,
+    top_k: int = DEFAULT_TOP_K,
+    max_neighbors: int = DEFAULT_NEIGHBOR_COUNT,
+    review_mode: ReviewMode = "rule_baseline",
+    config: "object | None" = None,
+    adapters: "object | None" = None,
+) -> RetrievalTrace:
+    """Run hybrid retrieval backed by real Elasticsearch + pgvector.
+
+    Builds the service adapters from ``ServiceConfig`` (or accepts pre-built
+    ``adapters``), then delegates to ``run_hybrid_retrieval`` with both routes
+    injected. The corpus is still loaded locally for metadata boosts, neighbor
+    expansion, and the governed result builder — only the two retrieval routes
+    are served by ES and pgvector.
+
+    Fail-fast: ``require_service_adapters`` inside ``build_service_adapters``
+    ensures both routes exist; there is no fallback to local retrieval.
+    """
+
+    from law_agent.config import require_service_config
+    from law_agent.review.retrieval.service_backends import (
+        ServiceAdapters,
+        build_service_adapters,
+    )
+
+    own_adapters = False
+    if adapters is None:
+        service_config = config or require_service_config()
+        adapters = build_service_adapters(service_config)
+        own_adapters = True
+
+    assert isinstance(adapters, ServiceAdapters)
+    try:
+        return run_hybrid_retrieval(
+            case_id=case_id,
+            chunks_path=chunks_path,
+            output_dir=output_dir,
+            top_k=top_k,
+            max_neighbors=max_neighbors,
+            review_mode=review_mode,
+            keyword_retriever=adapters.keyword,
+            vector_retriever=adapters.vector,
+        )
+    finally:
+        if own_adapters:
+            adapters.close()

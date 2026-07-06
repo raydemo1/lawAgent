@@ -57,12 +57,30 @@ def run_evaluation(
     selected_modes = tuple(modes or DEFAULT_EVAL_MODES)
     canonical_modes = tuple(_MODE_ALIASES.get(mode, mode) for mode in selected_modes)
 
-    results_by_mode: dict[str, list[CaseMetricResult]] = {}
-    for mode in canonical_modes:
-        mode_results: list[CaseMetricResult] = []
-        for scenario in scenarios:
-            mode_results.append(_run_single_case(scenario, chunks_path, mode=mode, top_k=top_k))
-        results_by_mode[mode] = mode_results
+    # Service mode needs ES + pgvector adapters; build once and reuse across
+    # all scenarios to avoid opening/closing connections per case.
+    service_adapters = None
+    if "service" in canonical_modes:
+        from law_agent.config import require_service_config
+        from law_agent.review.retrieval.service_backends import build_service_adapters
+
+        service_adapters = build_service_adapters(require_service_config())
+
+    try:
+        results_by_mode: dict[str, list[CaseMetricResult]] = {}
+        for mode in canonical_modes:
+            mode_results: list[CaseMetricResult] = []
+            for scenario in scenarios:
+                mode_results.append(
+                    _run_single_case(
+                        scenario, chunks_path, mode=mode, top_k=top_k,
+                        service_adapters=service_adapters,
+                    )
+                )
+            results_by_mode[mode] = mode_results
+    finally:
+        if service_adapters is not None:
+            service_adapters.close()
 
     mode_metrics = {
         mode: aggregate_metrics(results, mode)
@@ -92,15 +110,11 @@ def _run_single_case(
     *,
     mode: str,
     top_k: int,
+    service_adapters: object | None = None,
 ) -> CaseMetricResult:
     """Run a single scenario in one mode and return metrics."""
 
     mode = _MODE_ALIASES.get(mode, mode)
-    if mode == "service":
-        raise RuntimeError(
-            "service eval mode requires both Elasticsearch and pgvector adapters; "
-            "no fallback to local retrieval is allowed"
-        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -118,7 +132,20 @@ def _run_single_case(
 
         case_id = "review_eval"
 
-        if mode in {"local", "llm"}:
+        if mode == "service":
+            from law_agent.review.service import run_service_retrieval
+
+            trace = run_service_retrieval(
+                case_id=case_id,
+                chunks_path=chunks_path,
+                output_dir=tmp_path,
+                top_k=top_k,
+                review_mode=review_mode,
+                adapters=service_adapters,
+            )
+            hits = trace.final_evidence or trace.hybrid_results
+            second_retrieval_triggered = trace.evidence_self_check.second_retrieval_triggered
+        elif mode in {"local", "llm"}:
             trace = run_hybrid_retrieval(
                 case_id=case_id,
                 chunks_path=chunks_path,

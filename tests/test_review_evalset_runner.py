@@ -91,14 +91,32 @@ def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypa
     assert captured[0] is not None
 
 
-def test_service_eval_mode_fails_without_service_adapters(tmp_path: Path) -> None:
+def test_service_eval_mode_fails_fast_without_service_backend(tmp_path: Path) -> None:
+    """service mode must not silently fall back to local retrieval.
+
+    In an environment without the ``[service]`` extra installed, building the
+    service adapters fails fast with a dependency error. With the extra
+    installed, the gated integration test in ``test_service_integration.py``
+    covers the real backend path. Either way, service mode never returns a
+    local-style summary by silently substituting local retrievers.
+    """
+
     chunks_path = _write_fixture_corpus(tmp_path)
 
     import pytest
 
-    with pytest.raises(RuntimeError, match="no fallback to local retrieval"):
-        run_evaluation(
-            chunks_path=chunks_path,
-            scenarios=[get_default_scenarios()[0]],
-            modes=["service"],
-        )
+    try:
+        import elasticsearch  # noqa: F401
+    except ImportError:
+        # Default (no-service-extra) environment: must fail fast on the
+        # missing Elasticsearch dependency rather than falling back.
+        with pytest.raises(RuntimeError, match="elasticsearch"):
+            run_evaluation(
+                chunks_path=chunks_path,
+                scenarios=[get_default_scenarios()[0]],
+                modes=["service"],
+            )
+        return
+
+    # If the service extra is installed, defer to the gated integration test.
+    pytest.skip("service extra installed; see test_service_integration.py")

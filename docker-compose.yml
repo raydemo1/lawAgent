@@ -1,0 +1,43 @@
+services:
+  elasticsearch:
+    build:
+      context: docker
+      dockerfile: elasticsearch.Dockerfile
+    image: lawagent-elasticsearch:8.13.0-ik
+    container_name: lawagent-es
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: lawagent-pg
+    environment:
+      POSTGRES_USER: lawagent
+      POSTGRES_PASSWORD: lawagent
+      POSTGRES_DB: lawagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lawagent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  esdata:
+  pgdata:
