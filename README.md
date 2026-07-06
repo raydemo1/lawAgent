@@ -61,6 +61,168 @@ FLK 采集链路使用国家法律法规数据库官方接口：
 - `GET /law-search/download/pc?format=docx&bbbs=...`：解析公开签名下载 URL。
 - DOCX 正文解析使用 Python 标准库 `zipfile` 和 XML parser，不引入额外依赖。
 
+## Service Stack（Elasticsearch + pgvector）
+
+文件流水线产出的 chunks 可索引到 Elasticsearch + pgvector，实现真实混合检索（关键词 + 向量 RRF 融合）。
+
+### 前置条件
+
+- Docker Desktop 已安装并运行（WSL2 后端）
+- Python 3.11+
+
+### 1. 安装依赖
+
+```powershell
+# 基础依赖
+pip install -e .
+
+# service 可选依赖（Elasticsearch + pgvector 客户端）
+pip install -e ".[service]"
+```
+
+### 2. 配置环境变量
+
+```powershell
+Copy-Item .env.example .env
+```
+
+编辑 `.env`，填入 LLM 和 Embedding 配置：
+
+```text
+# LLM（DeepSeek 或其他 OpenAI 兼容服务）
+OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
+OPENAI_COMPATIBLE_API_KEY=sk-your-deepseek-api-key
+OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash
+
+# Embedding（硅基流动 SiliconCloud，OpenAI 兼容）
+EMBEDDING_PROVIDER=openai_compatible
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=sk-your-siliconcloud-api-key
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024
+EMBEDDING_TIMEOUT_SECONDS=60
+
+# Elasticsearch
+ES_URL=http://localhost:9200
+ES_INDEX_NAME=lawagent_chunks
+
+# PostgreSQL + pgvector
+PG_DSN=postgresql://lawagent:lawagent@localhost:5432/lawagent
+```
+
+验证配置：
+
+```powershell
+python -m law_agent.data config check
+```
+
+### 3. 启动 ES + pgvector
+
+```powershell
+# 首次启动（构建 ES 镜像，预装 smartcn 中文分词插件）
+docker compose up -d --build
+
+# 后续启动（镜像已构建，直接启动）
+docker compose up -d
+
+# 查看状态，等两个服务都显示 healthy
+docker compose ps
+```
+
+服务端口：
+
+| 服务 | 地址 | 用途 |
+|---|---|---|
+| Elasticsearch | `http://localhost:9200` | 关键词检索（smartcn 中文分词） |
+| PostgreSQL + pgvector | `localhost:5432` | 向量检索（BGE-M3 1024 维） |
+
+数据持久化到 Docker 命名卷 `esdata`、`pgdata`，`docker compose down` 不会丢数据。
+
+```powershell
+# 停止服务（保留数据）
+docker compose down
+
+# 彻底清除数据（重建索引前需要）
+docker compose down -v
+```
+
+### 4. 检查服务连通性
+
+```powershell
+python -m law_agent.review service-doctor
+```
+
+该命令会检查 ES 版本、PG 连接、Embedding provider 三个组件是否就绪。
+
+### 5. 索引语料
+
+确保已完成文件流水线（fetch → normalize → clean → enrich → chunk），生成 `chunks.jsonl` 后索引：
+
+```powershell
+python -m law_agent.review index-service --execute
+```
+
+该命令会将 chunks 写入 ES（关键词索引）和 pgvector（向量索引），使用 BGE-M3 生成 1024 维 embedding。
+
+### 6. 检索
+
+先创建 review case：
+
+```powershell
+python -m law_agent.review run `
+  --question "这个场景是否需要数据出境安全评估？" `
+  --material-text "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。" `
+  --output-dir artifacts/review
+```
+
+然后用 service 模式检索：
+
+```powershell
+# 从 review_cases.jsonl 获取 case_id
+$caseId = (Get-Content artifacts/review/review_cases.jsonl | ConvertFrom-Json)[0].review_case_id
+
+python -m law_agent.review retrieve `
+  --case-id $caseId `
+  --service `
+  --output-dir artifacts/review `
+  --top-k 5
+```
+
+`--service` 模式会同时查询 ES（关键词命中）和 pgvector（向量近邻），通过 RRF 融合排序后返回最终证据。
+
+### 切换 Embedding 模型
+
+切换模型后需重建 pgvector 表（维度变化时必须）：
+
+```powershell
+# 1. 更新 .env 中的 EMBEDDING_MODEL / EMBEDDING_DIM
+
+# 2. 删除旧索引
+docker exec lawagent-pg psql -U lawagent -c "DROP TABLE IF EXISTS lawagent_chunks;"
+python -c "from law_agent.config import load_service_config; from law_agent.review.retrieval.service_backends import create_elasticsearch_client; c=load_service_config(); es=create_elasticsearch_client(c); es.indices.delete(index=c.elasticsearch.index_name, ignore_unavailable=True); es.close()"
+
+# 3. 重新索引
+python -m law_agent.review index-service --execute
+```
+
+### 本地 Embedding（可选）
+
+不想调用云端 API 时，可使用本地 sentence-transformers：
+
+```powershell
+pip install -e ".[local-embeddings]"
+```
+
+`.env` 改为：
+
+```text
+EMBEDDING_PROVIDER=sentence_transformers
+EMBEDDING_MODEL=BAAI/bge-large-zh-v1.5
+EMBEDDING_DIM=1024
+```
+
+详细架构和运维说明见 [docs/SERVICE_STACK.md](docs/SERVICE_STACK.md)。
+
 ## 文档解析器
 
 默认 `auto` 解析策略保持第一阶段轻量：FLK 法规 DOCX 继续使用标准库解析，HTML/JSON/文本走内置规则；PDF 和图片类文档会转给 Docling。Docling 默认在 OCR 阶段使用本地 RapidOCR + ONNXRuntime；如果需要把 OCR 放到远程 PaddleOCR 服务，可接 KServe v2-compatible OCR API。用户上传扫描版 PDF、复杂版式 PDF 时，也可以显式切到 MinerU。
@@ -107,4 +269,4 @@ python -m law_agent.data normalize --parser docling
 
 ## 当前范围
 
-第一阶段先实现 JSONL 文件流水线，不急于接入 PostgreSQL、Elasticsearch、LangGraph、FastAPI 或前端。
+第一阶段已实现 JSONL 文件流水线，并已完成 Elasticsearch + pgvector 服务接入，支持真实混合检索。
