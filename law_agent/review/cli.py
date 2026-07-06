@@ -8,7 +8,12 @@ from pathlib import Path
 
 from law_agent.review.materials import material_from_file, material_from_text
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
-from law_agent.review.service import DEFAULT_REVIEW_RUNS_DIR, create_review_case, run_keyword_retrieval
+from law_agent.review.service import (
+    DEFAULT_REVIEW_RUNS_DIR,
+    create_review_case,
+    run_hybrid_retrieval,
+    run_keyword_retrieval,
+)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -51,12 +56,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 def _cmd_retrieve(args: argparse.Namespace) -> int:
     try:
-        trace = run_keyword_retrieval(
-            case_id=args.case_id,
-            chunks_path=Path(args.chunks),
-            output_dir=Path(args.output_dir),
-            top_k=args.top_k,
-        )
+        if args.hybrid:
+            trace = run_hybrid_retrieval(
+                case_id=args.case_id,
+                chunks_path=Path(args.chunks),
+                output_dir=Path(args.output_dir),
+                top_k=args.top_k,
+            )
+        else:
+            trace = run_keyword_retrieval(
+                case_id=args.case_id,
+                chunks_path=Path(args.chunks),
+                output_dir=Path(args.output_dir),
+                top_k=args.top_k,
+            )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -64,7 +77,17 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
     print(f"Retrieved evidence for case {trace.review_case_id}")
     print(f"Trace {trace.trace_id}")
     print(f"Keyword hits: {len(trace.keyword_results)}")
-    for hit in trace.keyword_results:
+    if args.hybrid:
+        print(f"Vector mock hits: {len(trace.vector_results)}")
+        print(f"Hybrid (RRF) hits: {len(trace.hybrid_results)}")
+        print(f"Neighbor chunks: {len(trace.neighbor_chunks)}")
+        if trace.metadata_boosts:
+            print(f"Metadata boosts: {trace.metadata_boosts}")
+        hits = trace.hybrid_results
+    else:
+        hits = trace.keyword_results
+
+    for hit in hits:
         print(
             f"  [{hit.rank + 1}] score={hit.score:.4f} role={hit.citation_role} "
             f"can_cite={hit.can_cite_clause} type={hit.matched_query_type}"
@@ -92,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=_cmd_run)
 
     retrieve = subparsers.add_parser(
-        "retrieve", help="Run keyword baseline retrieval for an existing review case"
+        "retrieve", help="Run retrieval for an existing review case"
     )
     retrieve.add_argument("--case-id", required=True)
     retrieve.add_argument(
@@ -102,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retrieve.add_argument("--output-dir", default=str(DEFAULT_REVIEW_RUNS_DIR))
     retrieve.add_argument("--top-k", type=int, default=10)
+    retrieve.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Run hybrid retrieval (keyword + vector_mock + RRF + neighbors)",
+    )
     retrieve.set_defaults(func=_cmd_retrieve)
 
     return parser

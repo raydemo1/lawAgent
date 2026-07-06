@@ -34,6 +34,11 @@ def _make_chunk(
     source_url: str = "https://example.gov.cn/doc/001",
     applicable_region: str = "CN",
     chunk_index: int = 0,
+    prev_chunk_id: str | None = None,
+    next_chunk_id: str | None = None,
+    topic_tags: list[str] | None = None,
+    legal_domain: list[str] | None = None,
+    applicable_subjects: list[str] | None = None,
 ) -> Chunk:
     return Chunk(
         chunk_id=chunk_id,
@@ -50,6 +55,11 @@ def _make_chunk(
         can_cite_clause=can_cite_clause,
         source_url=source_url,
         applicable_region=applicable_region,
+        prev_chunk_id=prev_chunk_id,
+        next_chunk_id=next_chunk_id,
+        topic_tags=topic_tags or [],
+        legal_domain=legal_domain or [],
+        applicable_subjects=applicable_subjects or [],
         char_count=len(text or "第一条　为了规范数据出境活动，制定本办法。"),
     )
 
