@@ -223,6 +223,58 @@ EMBEDDING_DIM=1024
 
 详细架构和运维说明见 [docs/SERVICE_STACK.md](docs/SERVICE_STACK.md)。
 
+## 前端启动
+
+前端基于 React 19 + Vite 8 + TypeScript，通过 Vite dev server 代理 `/api` 请求到后端 FastAPI。
+
+### 1. 启动后端 API
+
+```powershell
+# 确保已完成文件流水线（fetch → normalize → clean → enrich → chunk）
+# 确保 .env 已配置 LLM API key
+
+# 启动 FastAPI（端口 8000）
+pip install uvicorn
+uvicorn law_agent.review.api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+后端启动后可访问：
+- API 文档（Swagger UI）：`http://localhost:8000/docs`
+- 健康检查：`http://localhost:8000/api/health`
+
+### 2. 启动前端
+
+```powershell
+cd frontend
+
+# 安装依赖（首次）
+npm install
+
+# 启动 Vite dev server（端口 5173）
+npm run dev
+```
+
+浏览器打开 `http://localhost:5173` 即可使用。
+
+Vite dev server 会自动将 `/api/*` 请求代理到 `http://127.0.0.1:8000`（配置在 `frontend/vite.config.ts`），无需额外设置 CORS。
+
+### 3. 生产构建
+
+```powershell
+cd frontend
+npm run build
+# 产物输出到 frontend/dist/
+```
+
+### API 端点
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/review` | 提交审查请求（表单或文件上传） |
+| POST | `/api/eval/run` | 触发评测运行 |
+| GET | `/api/eval/latest` | 获取最近评测结果 |
+| GET | `/api/health` | 健康检查 |
+
 ## 文档解析器
 
 默认 `auto` 解析策略保持第一阶段轻量：FLK 法规 DOCX 继续使用标准库解析，HTML/JSON/文本走内置规则；PDF 和图片类文档会转给 Docling。Docling 默认在 OCR 阶段使用本地 RapidOCR + ONNXRuntime；如果需要把 OCR 放到远程 PaddleOCR 服务，可接 KServe v2-compatible OCR API。用户上传扫描版 PDF、复杂版式 PDF 时，也可以显式切到 MinerU。
