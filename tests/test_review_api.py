@@ -233,6 +233,34 @@ def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     assert "hybrid" in data["mode_metrics"]
 
 
+def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
+    """Two separate app instances must NOT share the eval cache.
+
+    Bug: ``_eval_cache`` was a module-level global, so running eval on one
+    app polluted every other app instance. After running eval on app1,
+    app2's ``GET /api/eval/latest`` must still return 404 (its own cache is
+    empty), not app1's cached result.
+    """
+
+    app1 = create_app(chunks_path=fixture_corpus)
+    app2 = create_app(chunks_path=fixture_corpus)
+    client1 = TestClient(app1)
+    client2 = TestClient(app2)
+
+    # Run eval on app1 — this caches the result in app1's state only.
+    run_response = client1.post("/api/eval/run")
+    assert run_response.status_code == 200
+
+    # app1 should now return the cached summary.
+    latest1 = client1.get("/api/eval/latest")
+    assert latest1.status_code == 200
+
+    # app2 has its own, isolated cache — it must NOT see app1's result.
+    latest2 = client2.get("/api/eval/latest")
+    assert latest2.status_code == 404
+    assert "detail" in latest2.json()
+
+
 # ---------------------------------------------------------------------------
 # POST /api/eval/run
 # ---------------------------------------------------------------------------

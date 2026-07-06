@@ -32,16 +32,32 @@ def rrf_fuse(
     When the same chunk appears in both lists, the hit with more
     metadata (first encountered) is used as the base, and the score
     reflects both contributions.
+
+    Ranks are derived from each input list's score ordering: each list
+    is sorted by ``score`` descending (``chunk_id`` as a deterministic
+    tiebreaker) before ranks are extracted, so rank 0 is the
+    highest-scored hit. This ensures metadata boosts applied upstream
+    by ``apply_boosts_to_hits`` (which update ``score`` but not the
+    stale ``rank`` field) are reflected in the fused ordering.
     """
 
-    # Build rank maps per retriever
+    # Sort each component list by boosted score descending so the rank
+    # used by RRF reflects the boosted ordering. chunk_id breaks ties
+    # deterministically. Without this, a boosted hit keeps its stale
+    # ``rank`` field and the boost is ignored by RRF.
+    keyword_hits = sorted(keyword_hits, key=lambda h: (-h.score, h.chunk_id))
+    vector_hits = sorted(vector_hits, key=lambda h: (-h.score, h.chunk_id))
+
+    # Build rank maps per retriever. Rank is the position in the
+    # score-sorted list (not the hit's stored ``rank`` field), so that
+    # boosts applied to ``score`` actually move hits up or down.
     keyword_ranks: dict[str, int] = {}
-    for hit in keyword_hits:
-        keyword_ranks[hit.chunk_id] = hit.rank
+    for rank, hit in enumerate(keyword_hits):
+        keyword_ranks[hit.chunk_id] = rank
 
     vector_ranks: dict[str, int] = {}
-    for hit in vector_hits:
-        vector_ranks[hit.chunk_id] = hit.rank
+    for rank, hit in enumerate(vector_hits):
+        vector_ranks[hit.chunk_id] = rank
 
     # All chunk IDs that appear in either list
     all_chunk_ids = set(keyword_ranks) | set(vector_ranks)

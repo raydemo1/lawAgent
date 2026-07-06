@@ -81,12 +81,24 @@ def _determine_usage(hit: RetrievalHit) -> CitationUsage:
     return "implementation_reference"
 
 
-def _build_citation(hit: RetrievalHit, chunk: Chunk | None = None) -> Citation:
-    """Build a Citation from a RetrievalHit, optionally enriched with chunk data."""
+def _build_citation(
+    hit: RetrievalHit,
+    chunk: Chunk | None = None,
+    usage: CitationUsage | None = None,
+) -> Citation:
+    """Build a Citation from a RetrievalHit, optionally enriched with chunk data.
+
+    ``usage`` lets the caller pass the final (possibly demoted) usage category.
+    When omitted (None), it falls back to ``_determine_usage(hit)`` so that any
+    direct callers keep the previous behavior.
+    """
 
     citation_label = None
     if chunk is not None:
         citation_label = chunk.citation_label
+
+    if usage is None:
+        usage = _determine_usage(hit)
 
     return Citation(
         source_id=hit.source_id,
@@ -95,7 +107,7 @@ def _build_citation(hit: RetrievalHit, chunk: Chunk | None = None) -> Citation:
         source_url=hit.source_url,
         citation_role=hit.citation_role,
         can_cite_clause=hit.can_cite_clause,
-        usage=_determine_usage(hit),
+        usage=usage,
         citation_label=citation_label,
     )
 
@@ -161,7 +173,7 @@ def group_citations(
 
     for hit, usage in hits_with_usage:
         chunk = chunks_by_id.get(hit.chunk_id)
-        citation = _build_citation(hit, chunk)
+        citation = _build_citation(hit, chunk, usage)
         groups[usage].append(citation)
 
     # Build CitationGroup list with scope notes

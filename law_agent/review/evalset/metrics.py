@@ -11,7 +11,7 @@ Metrics:
 from __future__ import annotations
 
 from law_agent.review.evalset.schemas import CaseMetricResult, EvalScenario
-from law_agent.review.schemas import RetrievalHit
+from law_agent.review.schemas import Citation, CitationGroup, RetrievalHit
 
 
 def compute_recall_at_k(
@@ -48,17 +48,41 @@ def compute_mrr_at_k(
 
 
 def count_citation_violations(
-    hits: list[RetrievalHit],
-    must_not_cite_as_clause: list[str],
+    hits: list[RetrievalHit] | None = None,
+    must_not_cite_as_clause: list[str] | None = None,
+    *,
+    citations: list[Citation] | None = None,
 ) -> int:
-    """Count chunks that must NOT be cited as clause but are."""
+    """Count chunks that must NOT be cited as a clause but are.
 
-    if not must_not_cite_as_clause:
+    When ``citations`` is provided, violations are counted against the final
+    citations: chunks listed in ``must_not_cite_as_clause`` that appear in a
+    citation whose ``usage`` is ``"legal_basis"`` or ``"conditional_basis"``
+    (i.e. used as a clause-level citation).
+
+    When ``citations`` is not provided, falls back to the legacy hit-based
+    behavior for backward compatibility: chunks in
+    ``must_not_cite_as_clause`` that appear in retrieval ``hits`` with
+    ``can_cite_clause=True``.
+    """
+
+    forbidden = set(must_not_cite_as_clause or [])
+    if not forbidden:
         return 0
 
-    forbidden = set(must_not_cite_as_clause)
+    if citations is not None:
+        violations = 0
+        for citation in citations:
+            if (
+                citation.chunk_id in forbidden
+                and citation.usage in ("legal_basis", "conditional_basis")
+            ):
+                violations += 1
+        return violations
+
+    # Legacy hit-based behavior (backward compatibility).
     violations = 0
-    for hit in hits:
+    for hit in hits or []:
         if hit.chunk_id in forbidden and hit.can_cite_clause:
             violations += 1
     return violations
@@ -70,6 +94,7 @@ def evaluate_case(
     *,
     risk_level: str = "",
     second_retrieval_triggered: bool = False,
+    citation_groups: list[CitationGroup] | None = None,
 ) -> CaseMetricResult:
     """Evaluate a single scenario case against retrieval results.
 
@@ -78,15 +103,28 @@ def evaluate_case(
         hits: Retrieved evidence hits (hybrid_results or keyword_results).
         risk_level: The review result risk level (for abstention check).
         second_retrieval_triggered: Whether second retrieval was triggered.
+        citation_groups: Optional final ``CitationGroup`` list from the
+            review result. When provided, citation violations are counted
+            against these final citations (chunks in
+            ``must_not_cite_as_clause`` used with ``usage`` of
+            ``"legal_basis"`` / ``"conditional_basis"``). When ``None``,
+            falls back to the legacy hit-based behavior.
     """
 
     recall_3, missing_3 = compute_recall_at_k(hits, scenario.expected_sources, 3)
     recall_5, missing_5 = compute_recall_at_k(hits, scenario.expected_sources, 5)
     mrr = compute_mrr_at_k(hits, scenario.expected_sources, 10)
 
-    citation_violations = count_citation_violations(
-        hits, scenario.must_not_cite_as_clause
-    )
+    if citation_groups is not None:
+        final_citations = [c for group in citation_groups for c in group.citations]
+        citation_violations = count_citation_violations(
+            must_not_cite_as_clause=scenario.must_not_cite_as_clause,
+            citations=final_citations,
+        )
+    else:
+        citation_violations = count_citation_violations(
+            hits, scenario.must_not_cite_as_clause
+        )
 
     # Abstention check
     abstention_correct = True
@@ -127,6 +165,7 @@ def evaluate_case(
         missing_sources=missing_5,
         is_bad_case=len(bad_reasons) > 0,
         bad_reasons=bad_reasons,
+        risk_level=risk_level,
     )
 
 

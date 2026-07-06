@@ -177,3 +177,56 @@ def test_consent_detection() -> None:
 
     assert facts.legal_basis_or_consent is not None
     assert "legal_basis_or_consent" not in facts.missing_information
+
+
+# ---------------------------------------------------------------------------
+# Negated consent detection (P1 bug)
+# ---------------------------------------------------------------------------
+
+def test_negated_consent_not_detected() -> None:
+    # "未取得用户同意" means "did NOT obtain user consent" -> must NOT be
+    # treated as affirmative consent.
+    facts = extract_facts("未取得用户同意")
+
+    assert facts.legal_basis_or_consent is None
+    assert "legal_basis_or_consent" in facts.missing_information
+
+
+def test_negated_consent_variants() -> None:
+    negated_samples = [
+        "未经告知",
+        "用户不同意",
+        "未签署协议",
+        "未获得授权",
+        "未取得许可",
+    ]
+    for sample in negated_samples:
+        facts = extract_facts(sample)
+
+        assert facts.legal_basis_or_consent is None, (
+            f"negated consent term should not be detected: {sample!r}"
+        )
+        assert "legal_basis_or_consent" in facts.missing_information
+
+
+def test_affirmative_consent_still_works() -> None:
+    # Affirmative phrasings must continue to be detected (no false negatives).
+    affirmative_samples = [
+        "已取得用户同意",
+        "用户已授权",
+    ]
+    for sample in affirmative_samples:
+        facts = extract_facts(sample)
+
+        assert facts.legal_basis_or_consent is not None, (
+            f"affirmative consent term should be detected: {sample!r}"
+        )
+        assert "legal_basis_or_consent" not in facts.missing_information
+
+
+def test_consent_in_longer_negated_context() -> None:
+    # A negated consent embedded in a longer sentence must still be ignored.
+    facts = extract_facts("公司未取得用户同意就将数据传输至境外")
+
+    assert facts.legal_basis_or_consent is None
+    assert "legal_basis_or_consent" in facts.missing_information

@@ -17,7 +17,16 @@ from law_agent.review.evalset.schemas import (
     EvalSummary,
     ModeMetrics,
 )
-from law_agent.review.ids import utc_now_iso
+from law_agent.review.evidence import run_self_check
+from law_agent.review.ids import make_id, utc_now_iso
+from law_agent.review.io import (
+    read_review_cases,
+    read_review_results,
+    review_cases_path,
+    review_results_path,
+    write_review_results,
+)
+from law_agent.review.result_builder import build_review_result
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, load_corpus
 from law_agent.review.service import create_review_case, run_hybrid_retrieval, run_keyword_retrieval
 
@@ -111,11 +120,38 @@ def _run_single_case(
                 top_k=top_k,
             )
             hits = trace.keyword_results
-            second_retrieval_triggered = False
+
+            # Bug 1 fix: run_keyword_retrieval (unlike run_hybrid_retrieval)
+            # does not run the evidence self-check or build a governed
+            # ReviewResult. Without this, review_results.jsonl keeps the
+            # placeholder "insufficient_evidence" risk level written by
+            # create_review_case(), so every non-abstain scenario is judged as
+            # an abstention failure. Mirror run_hybrid_retrieval: run the
+            # self-check and result builder to produce a real risk level.
+            cases = read_review_cases(review_cases_path(tmp_path))
+            target_case = next(c for c in cases if c.review_case_id == case_id)
+            chunks = load_corpus(chunks_path)
+            chunks_by_id = {c.chunk_id: c for c in chunks}
+            self_check = run_self_check(hits, target_case.review_facts, chunks_by_id)
+            review_result = build_review_result(
+                review_result_id=target_case.latest_result_id or make_id("result"),
+                review_case_id=case_id,
+                trace_id=trace.trace_id,
+                facts=target_case.review_facts,
+                self_check=self_check,
+                evidence_hits=hits,
+                chunks_by_id=chunks_by_id,
+            )
+            results_path = review_results_path(tmp_path)
+            existing_results = read_review_results(results_path)
+            updated_results = [
+                review_result if r.review_case_id == case_id else r
+                for r in existing_results
+            ]
+            write_review_results(results_path, updated_results)
+            second_retrieval_triggered = self_check.second_retrieval_triggered
 
         # Get risk level from result
-        from law_agent.review.io import read_review_results
-
         results_path = tmp_path / "review_results.jsonl"
         risk_level = ""
         if results_path.exists():

@@ -79,9 +79,6 @@ class EvalRunRequest(BaseModel):
 # App factory
 # ---------------------------------------------------------------------------
 
-# Module-level cache for the latest eval result
-_eval_cache: dict[str, EvalSummary | None] = {"latest": None}
-
 
 def create_app(
     *,
@@ -111,6 +108,8 @@ def create_app(
 
     # Store config in app state
     app.state.chunks_path = Path(chunks_path)
+    # Per-app eval cache so two app instances never share eval results.
+    app.state.eval_cache: dict[str, EvalSummary | None] = {"latest": None}
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -234,7 +233,7 @@ def create_app(
         Returns 404 if no evaluation has been run yet.
         """
 
-        cached = _eval_cache.get("latest")
+        cached = app.state.eval_cache.get("latest")
         if cached is None:
             raise HTTPException(
                 status_code=404,
@@ -263,7 +262,7 @@ def create_app(
                 detail=f"unexpected error during evaluation: {exc}",
             )
 
-        _eval_cache["latest"] = summary
+        app.state.eval_cache["latest"] = summary
         return JSONResponse(content=summary.model_dump())
 
     return app

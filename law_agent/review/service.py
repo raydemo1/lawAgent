@@ -402,7 +402,7 @@ def run_hybrid_retrieval(
 
     # Issue 8: Build governed review result
     review_result = build_review_result(
-        review_result_id=case.latest_result_id or id_factory("result"),
+        review_result_id=case.latest_result_id or make_id("result"),
         review_case_id=case_id,
         trace_id=target_trace.trace_id,
         facts=facts,

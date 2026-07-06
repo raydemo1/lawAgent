@@ -53,6 +53,7 @@ class CaseMetricResult(StrictModel):
     missing_sources: list[str] = Field(default_factory=list)
     is_bad_case: bool = False
     bad_reasons: list[str] = Field(default_factory=list)
+    risk_level: str = ""
 
 
 # ---------------------------------------------------------------------------

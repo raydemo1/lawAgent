@@ -128,6 +128,22 @@ _CONSENT_TERMS: dict[str, str] = {
     "知情": "知情同意",
 }
 
+# Negation prefixes that flip a consent term into its opposite meaning, e.g.
+# "未取得用户同意" (did NOT obtain user consent) must NOT be reported as
+# affirmative consent. Longer prefixes are listed first so the regex below
+# matches them as a whole unit rather than a shorter prefix plus filler.
+_NEGATION_PREFIXES: tuple[str, ...] = (
+    "未经", "尚未", "并未", "没有", "未", "不", "无",
+)
+
+# A consent term is considered negated when one of the negation prefixes
+# appears immediately before it, allowing up to a few non-punctuation filler
+# characters (e.g. "取得用户" in "未取得用户同意"). Punctuation characters act
+# as clause boundaries so a negation in a previous sentence does not leak in.
+_NEGATED_CONSENT_TAIL_RE = re.compile(
+    r"(?:" + "|".join(_NEGATION_PREFIXES) + r")[^，。；,;：:]{0,4}$"
+)
+
 _PURPOSE_KEYWORDS: tuple[str, ...] = (
     "推荐", "营销", "广告", "统计分析", "分析", "统计",
     "安全", "风控", "运营", "研发", "测试", "客服",
@@ -186,10 +202,26 @@ def _detect_purpose(text: str) -> str | None:
     return None
 
 
+def _is_consent_term_negated(text: str, start: int) -> bool:
+    """Return True when a negation prefix sits immediately before ``start``
+    (allowing a few non-punctuation filler characters), indicating the
+    consent term beginning at ``start`` is negated rather than affirmed.
+    """
+    return bool(_NEGATED_CONSENT_TAIL_RE.search(text[:start]))
+
+
 def _detect_consent(text: str) -> str | None:
     for term, label in _CONSENT_TERMS.items():
-        if term in text:
-            return label
+        # A term may appear more than once; only an occurrence that is NOT
+        # negated counts as affirmative consent.
+        search_from = 0
+        while True:
+            idx = text.find(term, search_from)
+            if idx == -1:
+                break
+            if not _is_consent_term_negated(text, idx):
+                return label
+            search_from = idx + len(term)
     return None
 
 

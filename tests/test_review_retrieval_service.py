@@ -4,8 +4,17 @@ from pathlib import Path
 
 from law_agent.data.io import write_jsonl
 from law_agent.data.schemas import Chunk
-from law_agent.review.io import read_retrieval_traces
-from law_agent.review.service import create_review_case, run_keyword_retrieval
+from law_agent.review.io import (
+    read_retrieval_traces,
+    read_review_cases,
+    review_cases_path,
+    write_review_cases,
+)
+from law_agent.review.service import (
+    create_review_case,
+    run_hybrid_retrieval,
+    run_keyword_retrieval,
+)
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
 
@@ -141,3 +150,44 @@ def test_run_keyword_retrieval_no_traces_file_raises(tmp_path: Path) -> None:
             chunks_path=chunks_path,
             output_dir=tmp_path,
         )
+
+
+def test_run_hybrid_retrieval_with_none_latest_result_id(tmp_path: Path) -> None:
+    """run_hybrid_retrieval must not raise NameError when latest_result_id is None.
+
+    Bug 2 (P3): service.py used ``case.latest_result_id or id_factory("result")``
+    in run_hybrid_retrieval(), but ``id_factory`` is not defined in that scope
+    (it is neither a parameter nor imported). Normal new cases have
+    ``latest_result_id`` set, so the ``or`` short-circuits and the bug stays
+    hidden. But old or hand-written cases with ``latest_result_id=None`` raise
+    ``NameError: name 'id_factory' is not defined``.
+    """
+
+    chunks_path = _write_fixture_corpus(tmp_path)
+
+    create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+
+    # Simulate an old / hand-written case that has no latest_result_id.
+    cases_path = review_cases_path(tmp_path)
+    cases = read_review_cases(cases_path)
+    assert cases, "expected the review case created above to be persisted"
+    cases[0] = cases[0].model_copy(update={"latest_result_id": None})
+    write_review_cases(cases_path, cases)
+
+    # Before the fix this raised NameError: name 'id_factory' is not defined.
+    trace = run_hybrid_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+    )
+
+    assert trace is not None
+    assert len(trace.hybrid_results) > 0
+

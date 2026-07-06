@@ -200,15 +200,25 @@ def test_rrf_fuse_combines_keyword_and_vector_ranks() -> None:
 
 
 def test_rrf_fuse_score_formula() -> None:
-    """Verify RRF score = sum(1 / (k + rank)) for a chunk in both lists."""
+    """Verify RRF score = sum(1 / (k + rank)) for a chunk in both lists.
 
-    keyword_hits = [_make_hit("a", rank=0)]
-    vector_hits = [_make_hit("a", rank=1)]
+    Ranks are derived from each list's score ordering (see the fusion fix),
+    so to place ``a`` at vector rank 1 we put a higher-scored hit ``b``
+    ahead of it in the vector list. ``a`` then contributes keyword rank 0
+    plus vector rank 1.
+    """
 
-    fused = rrf_fuse(keyword_hits, vector_hits, top_k=1, k=60)
+    keyword_hits = [_make_hit("a", rank=0, score=1.0)]  # a at keyword rank 0
+    vector_hits = [
+        _make_hit("b", rank=0, score=1.0),  # higher score -> vector rank 0
+        _make_hit("a", rank=1, score=0.5),  # lower score  -> vector rank 1
+    ]
 
+    fused = rrf_fuse(keyword_hits, vector_hits, top_k=2, k=60)
+
+    a_hit = next(h for h in fused if h.chunk_id == "a")
     expected = 1.0 / (60 + 0) + 1.0 / (60 + 1)
-    assert fused[0].score == pytest.approx(expected, rel=1e-5)
+    assert a_hit.score == pytest.approx(expected, rel=1e-5)
 
 
 def test_rrf_fuse_respects_top_k() -> None:
