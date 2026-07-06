@@ -3,7 +3,6 @@
 .agents/
 artifacts/
 .codex/
-docs/
 /data/
 
 # Environment and secrets
@@ -47,6 +46,10 @@ indexes/
 *.sqlite
 *.sqlite3
 *.db
+
+# Generated documentation / local review reports
+docs/data_governance_report.md
+docs/**/*.html
 
 # Logs
 *.log
