@@ -23,7 +23,6 @@ import type {
   ReviewFacts,
   ReviewResponse,
 } from '../types/api';
-import { uploadFile, ApiError } from '../api/client';
 import RiskBadge from './RiskBadge';
 
 export interface WorkbenchPageProps {
@@ -35,8 +34,8 @@ export interface WorkbenchPageProps {
   onQuestionChange: (value: string) => void;
   /** Update the material text. */
   onMaterialChange: (value: string) => void;
-  /** Called with trimmed question + material when the user submits. */
-  onSubmit: (question: string, material: string) => void;
+  /** Called with question + material + optional file when the user submits. */
+  onSubmit: (question: string, material: string, file?: File | null) => void;
   /** True while a review request is in flight. */
   loading: boolean;
   /** The most recent review response, if any. */
@@ -124,19 +123,21 @@ export default function WorkbenchPage({
   error,
   historyCount,
 }: WorkbenchPageProps): JSX.Element {
-  // File upload state
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadedName, setUploadedName] = useState<string | null>(null);
+  // Selected file state — file is submitted directly with the review,
+  // not pre-extracted. The backend saves it as part of the review case.
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Submit is allowed only when not loading and at least one field has content.
+  // Submit is allowed when not loading and there's a question plus
+  // either material text or a selected file.
   const canSubmit =
-    !loading && !uploading && (question.trim() !== '' || material.trim() !== '');
+    !loading &&
+    question.trim() !== '' &&
+    (material.trim() !== '' || selectedFile !== null);
 
   const handleSubmit = (): void => {
     if (!canSubmit) return;
-    onSubmit(question.trim(), material.trim());
+    onSubmit(question.trim(), material.trim(), selectedFile);
   };
 
   // Ctrl/Cmd + Enter inside the textarea submits the form.
@@ -148,36 +149,20 @@ export default function WorkbenchPage({
   };
 
   const handleFileChange = useCallback(
-    async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    (e: ChangeEvent<HTMLInputElement>): void => {
       const file = e.target.files?.[0];
       if (!file) return;
-
-      setUploading(true);
-      setUploadError(null);
-      setUploadedName(null);
-
-      try {
-        const result = await uploadFile(file);
-        onMaterialChange(result.text);
-        setUploadedName(result.filename);
-      } catch (err) {
-        const msg =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : '文件上传失败';
-        setUploadError(msg);
-      } finally {
-        setUploading(false);
-        // Reset input so the same file can be re-selected
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-      }
+      setSelectedFile(file);
     },
-    [onMaterialChange],
+    [],
   );
+
+  const handleRemoveFile = useCallback((): void => {
+    setSelectedFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, []);
 
   const reviewResult = result?.review_result ?? null;
   const facts = result?.review_facts ?? null;
@@ -212,14 +197,22 @@ export default function WorkbenchPage({
               待审查材料
             </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {uploadedName && !uploading && (
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
-                  已加载: {uploadedName}
-                </span>
-              )}
-              {uploading && (
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-muted-text, #64748b)' }}>
-                  正在提取文本...
+              {selectedFile && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {selectedFile.name}
+                  <button
+                    type="button"
+                    onClick={handleRemoveFile}
+                    disabled={loading}
+                    style={{
+                      border: 'none', background: 'none', cursor: 'pointer',
+                      color: 'var(--color-danger)', fontSize: '1rem', lineHeight: 1,
+                      padding: '0 2px',
+                    }}
+                    title="移除文件"
+                    >
+                    ×
+                  </button>
                 </span>
               )}
               <input
@@ -227,7 +220,7 @@ export default function WorkbenchPage({
                 type="file"
                 accept=".txt,.md,.pdf,.docx,.html,.htm,.json"
                 onChange={handleFileChange}
-                disabled={uploading || loading}
+                disabled={loading}
                 style={{ display: 'none' }}
                 id="wb-file-upload"
               />
@@ -235,30 +228,25 @@ export default function WorkbenchPage({
                 type="button"
                 className="btn-secondary"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || loading}
+                disabled={loading}
                 style={{
                   fontSize: '0.75rem',
                   padding: '4px 12px',
-                  opacity: uploading || loading ? 0.6 : 1,
-                  cursor: uploading || loading ? 'not-allowed' : 'pointer',
+                  opacity: loading ? 0.6 : 1,
+                  cursor: loading ? 'not-allowed' : 'pointer',
                 }}
               >
-                上传文件
+                选择文件
               </button>
             </div>
           </div>
-          {uploadError && (
-            <div className="error-box" style={{ marginBottom: '8px', fontSize: '0.8125rem' }}>
-              {uploadError}
-            </div>
-          )}
           <textarea
             id="wb-material"
             className="workbench__textarea"
             value={material}
             onChange={(e) => onMaterialChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={'粘贴待审查的材料文本，或点击右上角「上传文件」上传文档（支持 .txt .md .pdf .docx）'}
+            placeholder={'粘贴待审查的材料文本，或点击右上角「选择文件」上传文档（支持 .txt .md .pdf .docx），文件将直接随审查提交'}
             disabled={loading}
           />
         </div>

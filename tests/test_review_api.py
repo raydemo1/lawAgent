@@ -50,7 +50,7 @@ def test_health_check_returns_ok(client: TestClient) -> None:
 def test_review_returns_structured_response(client: TestClient) -> None:
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "这个场景是否需要数据出境安全评估？",
             "material_text": "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。",
         },
@@ -84,7 +84,7 @@ def test_review_returns_structured_response(client: TestClient) -> None:
 def test_review_includes_trace_id(client: TestClient) -> None:
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "数据出境安全评估",
             "material_text": "手机号发送给新加坡。",
         },
@@ -99,7 +99,7 @@ def test_review_includes_trace_id(client: TestClient) -> None:
 def test_review_includes_citation_groups(client: TestClient) -> None:
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "数据出境安全评估",
             "material_text": "手机号发送给新加坡。",
         },
@@ -125,7 +125,7 @@ def test_review_includes_citation_groups(client: TestClient) -> None:
 def test_review_blank_question_returns_400(client: TestClient) -> None:
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "   ",
             "material_text": "材料",
         },
@@ -139,7 +139,7 @@ def test_review_blank_question_returns_400(client: TestClient) -> None:
 def test_review_missing_question_returns_422(client: TestClient) -> None:
     response = client.post(
         "/api/review",
-        json={
+        data={
             "material_text": "材料",
         },
     )
@@ -147,19 +147,21 @@ def test_review_missing_question_returns_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_review_missing_material_text_returns_422(client: TestClient) -> None:
+def test_review_missing_material_text_returns_400(client: TestClient) -> None:
+    """When no material_text and no file are provided, returns 400."""
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "问题",
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_review_empty_body_returns_422(client: TestClient) -> None:
-    response = client.post("/api/review", json={})
+    """When question is missing entirely (required Form field), returns 422."""
+    response = client.post("/api/review", data={})
     assert response.status_code == 422
 
 
@@ -168,7 +170,7 @@ def test_review_abstention_case(client: TestClient) -> None:
 
     response = client.post(
         "/api/review",
-        json={
+        data={
             "question": "这个数据处理活动是否合规？",
             "material_text": "我们处理一些数据。",
         },
@@ -179,6 +181,31 @@ def test_review_abstention_case(client: TestClient) -> None:
     result = data["review_result"]
     # Should either abstain or have low risk
     assert result["risk_level"] in ("insufficient_evidence", "low")
+
+
+def test_review_with_file_upload(client: TestClient) -> None:
+    """POST /api/review with a file upload should extract text and run review."""
+
+    # Create a simple .txt file as test material
+    file_content = "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。"
+
+    response = client.post(
+        "/api/review",
+        data={
+            "question": "这个场景是否需要数据出境安全评估？",
+        },
+        files={
+            "file": ("test_material.txt", file_content.encode("utf-8"), "text/plain"),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert "review_case_id" in data
+    assert "trace_id" in data
+    assert data["review_facts"]["cross_border_transfer"] is True
+    assert data["review_result"]["risk_level"] in ("high", "medium", "low", "insufficient_evidence")
 
 
 # ---------------------------------------------------------------------------

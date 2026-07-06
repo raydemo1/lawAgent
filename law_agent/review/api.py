@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -122,89 +122,72 @@ def create_app(
 
         return HealthResponse(status="ok")
 
-    @app.post("/api/upload")
-    async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
-        """Upload a document file and extract its text content.
-
-        Uses the project's existing docling-based text extraction pipeline
-        (law_agent.data.normalize._read_text) — no reinventing the wheel.
-
-        Supports: .txt, .md, .pdf, .docx, .html, .json, and image formats
-        Returns: {"filename": str, "text": str, "char_count": int, "parser": str}
-        """
-
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No filename provided")
-
-        # Read raw bytes and write to a temp file for _read_text
-        raw = await file.read()
-        if not raw:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
-        import tempfile as _tempfile
-
-        suffix = Path(file.filename).suffix
-        try:
-            with _tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                tmp.write(raw)
-                tmp_path = Path(tmp.name)
-
-            from law_agent.data.normalize import _read_text
-
-            parsed = _read_text(tmp_path, parser="auto")
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to extract text from file: {exc}",
-            )
-        finally:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except (OSError, NameError):
-                pass
-
-        text = parsed.text.strip()
-        if not text:
-            raise HTTPException(
-                status_code=400,
-                detail="No text content could be extracted from the file",
-            )
-
-        return JSONResponse(content={
-            "filename": file.filename,
-            "text": text,
-            "char_count": len(text),
-            "parser": parsed.parser,
-        })
-
     @app.post("/api/review", response_model=ReviewResponse)
-    async def run_review(request: ReviewRequest) -> ReviewResponse:
+    async def run_review(
+        question: str = Form(...),
+        material_text: str = Form(default=""),
+        file: UploadFile | None = File(default=None),
+    ) -> ReviewResponse:
         """Run a full review case: create case, hybrid retrieval, build result.
+
+        Accepts either:
+        - ``material_text``: pasted text (JSON form field)
+        - ``file``: uploaded document file (.txt, .md, .pdf, .docx, .html, .json)
+
+        When a file is provided, it is saved to the review run directory and
+        text is extracted using the project's docling pipeline. The file
+        becomes part of the review case history (MaterialRecord.uploaded_file).
 
         Returns structured review result with facts, evidence self-check,
         citation groups, and trace IDs.
         """
 
-        # Validate non-blank (FastAPI min_length handles empty strings,
-        # but we also check for whitespace-only)
-        if not request.question.strip():
+        question = question.strip()
+        if not question:
             raise HTTPException(status_code=400, detail="question must not be blank")
-        if not request.material_text.strip():
-            raise HTTPException(status_code=400, detail="material_text must not be blank")
 
         # Use a temp directory for the review run
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
             try:
-                # Create review case
-                response = create_review_case(
-                    question=request.question,
-                    material_text=request.material_text,
-                    output_dir=tmp_path,
-                )
+                if file is not None and file.filename:
+                    # --- File upload mode ---
+                    raw = await file.read()
+                    if not raw:
+                        raise HTTPException(
+                            status_code=400, detail="uploaded file is empty"
+                        )
+
+                    # Save the file to the review run directory
+                    uploads_dir = tmp_path / "uploads"
+                    uploads_dir.mkdir(exist_ok=True)
+                    saved_path = uploads_dir / Path(file.filename).name
+                    saved_path.write_bytes(raw)
+
+                    # Convert file to MaterialRecord (docling extraction)
+                    from law_agent.review.materials import material_from_file
+
+                    material_record = material_from_file(saved_path)
+
+                    # Create review case with the material record
+                    response = create_review_case(
+                        question=question,
+                        material=material_record,
+                        output_dir=tmp_path,
+                    )
+                else:
+                    # --- Pasted text mode ---
+                    if not material_text.strip():
+                        raise HTTPException(
+                            status_code=400,
+                            detail="material_text or file must be provided",
+                        )
+                    response = create_review_case(
+                        question=question,
+                        material_text=material_text,
+                        output_dir=tmp_path,
+                    )
 
                 case_id = response.review_case.review_case_id
                 trace_id = response.trace.trace_id

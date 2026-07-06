@@ -43,11 +43,11 @@ export default function App(): JSX.Element {
 
   // ---- Handlers ---------------------------------------------------------
   const handleSubmit = useCallback(
-    async (q: string, m: string) => {
+    async (q: string, m: string, file?: File | null) => {
       setLoading(true)
       setError(null)
       try {
-        const response = await submitReview(q, m)
+        const response = await submitReview(q, m, file)
         setReviewHistory((prev) => [response, ...prev])
         setCurrentResult(response)
       } catch (err) {

@@ -194,33 +194,96 @@ async function request<T>(
 /**
  * Submit a review case for analysis.
  *
- * Sends the user's question and material text to the backend, which runs
- * the full review pipeline (fact extraction, hybrid retrieval, evidence
- * self-check, result construction) and returns the structured result.
+ * Sends the user's question and either material text or an uploaded file to
+ * the backend. When a file is provided, the backend saves it to the review
+ * run directory and extracts text using docling — the file becomes part of
+ * the review case history.
  *
  * @param question      The review question to answer.
- * @param materialText  The material text to review.
+ * @param materialText  The material text to review (used when no file).
+ * @param file          Optional uploaded file (.txt, .md, .pdf, .docx, etc.)
  * @returns             The full review response.
  * @throws {ApiError}   On 400 (blank input / bad request) or 500 (server error).
  */
 export async function submitReview(
   question: string,
   materialText: string,
+  file?: File | null,
 ): Promise<ReviewResponse> {
   if (!question || !question.trim()) {
     throw new ApiError(0, 'question must not be blank', '/api/review');
   }
-  if (!materialText || !materialText.trim()) {
-    throw new ApiError(0, 'material_text must not be blank', '/api/review');
+  if (!file && (!materialText || !materialText.trim())) {
+    throw new ApiError(
+      0,
+      'material_text or file must be provided',
+      '/api/review',
+    );
   }
 
-  return request<ReviewResponse>('/api/review', {
-    method: 'POST',
-    body: JSON.stringify({
-      question,
-      material_text: materialText,
-    }),
-  });
+  const url = buildUrl('/api/review');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort('timeout'),
+    120_000, // 2 min for file extraction + retrieval
+  );
+
+  let response: Response;
+  try {
+    if (file) {
+      // Multipart form data for file upload
+      const formData = new FormData();
+      formData.append('question', question);
+      formData.append('material_text', materialText || '');
+      formData.append('file', file);
+      response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
+    } else {
+      // Plain form data for text-only submission
+      const formData = new FormData();
+      formData.append('question', question);
+      formData.append('material_text', materialText);
+      response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw new ApiError(
+      0,
+      err instanceof Error
+        ? `Network error submitting review: ${err.message}`
+        : 'Network error submitting review',
+      '/api/review',
+      null,
+    );
+  }
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    let detail: unknown = null;
+    try {
+      detail = await response.json();
+    } catch {
+      // Non-JSON error response
+    }
+    const detailStr = detailToString(detail);
+    throw new ApiError(
+      response.status,
+      detailStr
+        ? `Review failed (${response.status}): ${detailStr}`
+        : `Review failed (${response.status})`,
+      '/api/review',
+      detail,
+    );
+  }
+
+  return response.json();
 }
 
 /**
@@ -258,71 +321,6 @@ export async function getLatestEval(): Promise<EvalSummary | null> {
     }
     throw err;
   }
-}
-
-/**
- * Upload a document file for text extraction.
- *
- * Sends a file to the backend, which uses the project's docling-based
- * extraction pipeline to convert it to plain text. The extracted text
- * can then be used as material_text in a subsequent submitReview call.
- *
- * @param file          The file to upload (.txt, .md, .pdf, .docx, .html, etc.)
- * @returns             The extracted text and metadata.
- * @throws {ApiError}   On 400 (unsupported type / empty) or 500 (extraction error).
- */
-export async function uploadFile(
-  file: File,
-): Promise<{ filename: string; text: string; char_count: number; parser: string }> {
-  const formData = new FormData();
-  formData.append('file', file);
-
-  const url = buildUrl('/api/upload');
-  const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort('timeout'),
-    120_000, // 2 min timeout for large file extraction
-  );
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-  } catch (err) {
-    clearTimeout(timeoutId);
-    throw new ApiError(
-      0,
-      err instanceof Error
-        ? `Network error uploading file: ${err.message}`
-        : 'Network error uploading file',
-      '/api/upload',
-      null,
-    );
-  }
-  clearTimeout(timeoutId);
-
-  if (!response.ok) {
-    let detail: unknown = null;
-    try {
-      detail = await response.json();
-    } catch {
-      // Non-JSON error response
-    }
-    const detailStr = detailToString(detail);
-    throw new ApiError(
-      response.status,
-      detailStr
-        ? `File upload failed (${response.status}): ${detailStr}`
-        : `File upload failed (${response.status})`,
-      '/api/upload',
-      detail,
-    );
-  }
-
-  return response.json();
 }
 
 /**
