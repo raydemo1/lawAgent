@@ -522,48 +522,67 @@ python -m law_agent.review eval `
 - No LLM-as-judge.
 - No answer fluency scoring.
 
-## Issue 10: Expose a Local Review API
+## Issue 10: Expose a Local Review API (FastAPI)
 
 ## What to build
 
-Expose the review flow through a local JSON API so the frontend can call real review behavior instead of static mock data.
+Expose the review flow through a local JSON API using **FastAPI** so the frontend can call real review behavior instead of static mock data. FastAPI provides automatic request validation via Pydantic models, OpenAPI docs at `/docs`, and native async support — all of which reduce boilerplate compared to a standard-library HTTP server.
 
 ## Why this slice exists
 
-The frontend should connect to the actual review loop, but the current repo has no web framework dependency. The first API should be minimal and local-first.
+The frontend should connect to the actual review loop. The original spec preferred no new dependency, but a standard-library `http.server` approach requires hand-rolling JSON parsing, validation, CORS, routing, and error formatting — all of which FastAPI handles declaratively. See `docs/ADR-010-use-fastapi.md` for the decision rationale.
 
 ## Implementation notes
 
-- Prefer no new dependency for the first pass.
-- Add `law_agent/review/server.py` using Python standard library `http.server` or `wsgiref.simple_server`.
-- Endpoint:
-  - `POST /review`
-  - input: `question`, `material_text`, optional `material_file_path` for local beta testing
-  - output: `ReviewResult`, `ReviewFacts`, evidence summary, trace ID
-- Endpoint:
-  - `GET /eval/latest`
-  - output latest eval JSON if present
-- Add CORS headers for local frontend dev.
-- Keep server thin: call the same service function used by CLI.
-- If standard library server becomes too painful, create a short ADR before adding FastAPI or another dependency.
+- Add dependencies: `fastapi`, `uvicorn[standard]` to `pyproject.toml`.
+- Create `law_agent/review/api.py` with a FastAPI application instance.
+- Pydantic request/response models mirror the existing review schemas.
+- Endpoints:
+  - `POST /api/review`
+    - input: `ReviewRequest` (`question: str`, `material_text: str`)
+    - output: `ReviewResponse` (includes `review_case_id`, `trace_id`, `review_facts`, `review_result`, `evidence_self_check`, `citation_groups`)
+    - Internally calls `create_review_case` + `run_hybrid_retrieval`, same service functions used by CLI.
+  - `GET /api/eval/latest`
+    - output: latest `EvalSummary` JSON if a cached eval result exists, else `404`.
+  - `POST /api/eval/run`
+    - Triggers `run_evaluation` and caches the result.
+    - output: `EvalSummary`.
+  - `GET /api/health`
+    - output: `{"status": "ok"}` for health checks.
+- Add CORSMiddleware with permissive origins for local frontend dev (`http://localhost:*`).
+- Structured JSON error responses via FastAPI exception handlers:
+  - `422` for validation errors (FastAPI default).
+  - `400` for business logic errors (blank question, missing material, etc.).
+  - `500` for unexpected errors with a generic message.
+- Keep API layer thin: all business logic stays in `service.py`.
+- Add `serve` subcommand to CLI: `python -m law_agent.review serve --host 127.0.0.1 --port 8000`.
+- Document the startup command in the spec.
 
 ## Acceptance criteria
 
-- [ ] Local server starts with a documented command.
-- [ ] `POST /review` returns structured JSON for pasted material.
-- [ ] API response includes trace ID and citation groups.
-- [ ] API errors are structured JSON.
+- [ ] `python -m law_agent.review serve` starts a local FastAPI server.
+- [ ] `POST /api/review` returns structured JSON with trace ID, review facts, review result, evidence self-check, and citation groups.
+- [ ] `GET /api/eval/latest` returns the latest eval summary or 404.
+- [ ] `POST /api/eval/run` triggers evaluation and returns the summary.
+- [ ] API errors are structured JSON with `detail` field.
+- [ ] CORS headers allow local frontend dev.
+- [ ] OpenAPI docs available at `/docs`.
 
 ## Tests
 
-- Unit test the request handler service function directly.
-- Optional integration test using `urllib.request` against a background server if reliable.
+- Unit test the API using FastAPI `TestClient` (from `fastapi.testclient`).
+- Test `POST /api/review` with valid input returns 200 and structured response.
+- Test `POST /api/review` with blank question returns 400.
+- Test `GET /api/eval/latest` returns 404 when no eval has been run.
+- Test `POST /api/eval/run` returns eval summary.
+- Test `GET /api/health` returns 200.
 
 ## Non-goals
 
 - No authentication.
 - No production deployment.
-- No async job queue.
+- No async job queue — review runs synchronously.
+- No WebSocket for streaming (future enhancement).
 
 ## Issue 11: Wire the Single-User Frontend Workbench to the Review API
 

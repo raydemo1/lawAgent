@@ -177,6 +177,34 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "error: uvicorn is not installed. Install with: pip install uvicorn[standard]",
+            file=sys.stderr,
+        )
+        return 2
+
+    from law_agent.review.api import create_app
+
+    app = create_app(chunks_path=Path(args.chunks))
+
+    print(f"Starting LawAgent Review API at http://{args.host}:{args.port}")
+    print(f"  OpenAPI docs: http://{args.host}:{args.port}/docs")
+    print(f"  Corpus: {args.chunks}")
+    print("  Press Ctrl+C to stop")
+
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m law_agent.review")
     subparsers = parser.add_subparsers(dest="command")
@@ -228,6 +256,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Save JSON summary to this file path",
     )
     eval_parser.set_defaults(func=_cmd_eval)
+
+    serve = subparsers.add_parser(
+        "serve", help="Start the local FastAPI review API server"
+    )
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind (default: 127.0.0.1)",
+    )
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind (default: 8000)",
+    )
+    serve.add_argument(
+        "--chunks",
+        default=str(DEFAULT_CHUNKS_PATH),
+        help="Path to chunks.jsonl corpus file",
+    )
+    serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload for development",
+    )
+    serve.set_defaults(func=_cmd_serve)
 
     return parser
 
