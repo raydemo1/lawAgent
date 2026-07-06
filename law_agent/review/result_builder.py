@@ -37,17 +37,20 @@ _HIGH_RISK_SENSITIVE_TERMS: tuple[str, ...] = (
 
 
 def _has_high_risk_triggers(facts: ReviewFacts) -> bool:
-    """Check if high-risk conditions are present."""
+    """Check if high-risk conditions are present.
 
-    # Sensitive personal info + cross-border without consent
-    if (
-        facts.sensitive_personal_info
-        and facts.cross_border_transfer
-        and not facts.legal_basis_or_consent
-    ):
+    Note: ``legal_basis_or_consent`` being None means "not mentioned in
+    material", not "definitely absent". We only treat it as high-risk when
+    combined with sensitive info + cross-border, since that combination
+    warrants caution regardless.
+    """
+
+    # Sensitive personal info + cross-border: high risk regardless of consent
+    # (if consent is missing from material, it's a gap that needs attention)
+    if facts.sensitive_personal_info and facts.cross_border_transfer:
         return True
 
-    # Sensitive data types that are high-risk
+    # Explicit high-risk data types + cross-border
     for data_type in facts.data_types:
         if any(term in data_type for term in _HIGH_RISK_SENSITIVE_TERMS):
             if facts.cross_border_transfer:
@@ -60,6 +63,32 @@ def _has_high_risk_triggers(facts: ReviewFacts) -> bool:
 # Risk level determination
 # ---------------------------------------------------------------------------
 
+def _has_no_substantive_facts(facts: ReviewFacts) -> bool:
+    """Check if facts have no substantive legal dimensions at all.
+
+    When the material is extremely vague (e.g. "我们处理一些数据"), the
+    system should abstain even if generic legal chunks are retrieved —
+    there's no meaningful legal question to answer.
+    """
+
+    has_cross_border = bool(facts.cross_border_transfer)
+    has_sensitive = bool(facts.sensitive_personal_info)
+    has_industry = bool(facts.industry)
+    has_region = bool(facts.region)
+    # Filter out generic terms like "数据" that carry no legal specificity
+    specific_data_types = [
+        dt for dt in facts.data_types
+        if dt not in ("数据", "信息", "个人信息", "")
+    ]
+    has_specific_data = len(specific_data_types) > 0
+    has_processing_purpose = bool(facts.processing_purpose)
+
+    return not any([
+        has_cross_border, has_sensitive, has_industry, has_region,
+        has_specific_data, has_processing_purpose,
+    ])
+
+
 def determine_risk_level(
     facts: ReviewFacts,
     self_check: EvidenceSelfCheck,
@@ -71,6 +100,11 @@ def determine_risk_level(
     if self_check.status == "insufficient":
         return "insufficient_evidence"
     if not has_legal_basis_evidence and self_check.status != "sufficient":
+        return "insufficient_evidence"
+
+    # No substantive facts: abstain even if evidence is technically present.
+    # Generic legal chunks don't help when there's no real legal question.
+    if _has_no_substantive_facts(facts):
         return "insufficient_evidence"
 
     # High risk triggers

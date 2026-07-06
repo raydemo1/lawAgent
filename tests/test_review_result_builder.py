@@ -212,10 +212,24 @@ def test_risk_level_medium_for_sensitive_without_cross_border() -> None:
 
 
 def test_risk_level_low_for_no_risk_factors() -> None:
-    facts = ReviewFacts()
+    """When facts have substance but no risk triggers, risk is low."""
+
+    facts = ReviewFacts(
+        data_types=["订单信息"],
+        processing_purpose="订单履约",
+    )
     check = _sufficient_check()
 
     assert determine_risk_level(facts, check, has_legal_basis_evidence=True) == "low"
+
+
+def test_risk_level_insufficient_for_no_substantive_facts() -> None:
+    """When facts are completely empty/vague, abstain even with evidence."""
+
+    facts = ReviewFacts()  # no substantive dimensions
+    check = _sufficient_check()
+
+    assert determine_risk_level(facts, check, has_legal_basis_evidence=True) == "insufficient_evidence"
 
 
 def test_risk_level_insufficient_when_no_legal_basis_and_not_sufficient() -> None:

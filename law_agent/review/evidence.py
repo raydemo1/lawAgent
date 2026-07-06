@@ -174,7 +174,14 @@ def _check_cross_border_match(hits: list[RetrievalHit], facts: ReviewFacts) -> E
 
 
 def _check_critical_facts_missing(facts: ReviewFacts) -> EvidenceIssue | None:
-    """Check if critical facts are missing, preventing definitive judgment."""
+    """Check if critical facts are missing.
+
+    This is a soft warning, not a hard block. Missing facts reduce confidence
+    and are recorded in risk_boundaries, but do NOT force abstention when
+    evidence is otherwise sufficient. Users often don't mention consent or
+    data volume in their material — that's an input quality issue, not an
+    evidence sufficiency issue.
+    """
 
     critical_missing = [
         f for f in facts.missing_information if f in _CRITICAL_MISSING_FACTS
@@ -182,7 +189,7 @@ def _check_critical_facts_missing(facts: ReviewFacts) -> EvidenceIssue | None:
     if critical_missing:
         return EvidenceIssue(
             issue_type="critical_facts_missing",
-            description=f"关键事实缺失：{', '.join(critical_missing)}，无法做出明确判断",
+            description=f"关键事实缺失：{', '.join(critical_missing)}，影响判断准确性",
         )
     return None
 
@@ -227,24 +234,28 @@ def run_self_check(
             second_retrieval_triggered=False,
         )
 
-    # Determine if second retrieval can help
-    # Critical facts missing cannot be fixed by retrieval — it's a user input issue
+    # Separate evidence-quality issues from input-quality issues
     has_critical_missing = any(
         i.issue_type == "critical_facts_missing" for i in issues
     )
-    fixable_issues = [i for i in issues if i.issue_type != "critical_facts_missing"]
+    # Evidence-quality issues are potentially fixable by second retrieval
+    evidence_issues = [
+        i for i in issues if i.issue_type != "critical_facts_missing"
+    ]
 
-    if not fixable_issues and has_critical_missing:
-        # Only critical facts missing — insufficient, can't fix with retrieval
+    # If the ONLY issue is critical_facts_missing (evidence is actually good),
+    # do NOT abstain — mark as sufficient with a warning. Missing facts is an
+    # input quality issue, not an evidence sufficiency issue.
+    if not evidence_issues and has_critical_missing:
         return EvidenceSelfCheck(
-            status="insufficient",
+            status="sufficient",
             issues=issues,
             triggered_reasons=triggered_reasons,
             second_retrieval_triggered=False,
         )
 
-    # Has fixable issues — trigger second retrieval
-    plan = build_second_retrieval_plan(issues, facts, triggered_reasons)
+    # Has evidence-quality issues — trigger second retrieval to try to fix them
+    plan = build_second_retrieval_plan(evidence_issues, facts, triggered_reasons)
     return EvidenceSelfCheck(
         status="needs_second_retrieval",
         issues=issues,

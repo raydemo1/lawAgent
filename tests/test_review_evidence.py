@@ -171,8 +171,10 @@ def test_cross_border_mismatch_triggers() -> None:
 # Self-check: critical facts missing
 # ---------------------------------------------------------------------------
 
-def test_critical_facts_missing_alone_is_insufficient() -> None:
-    """When only critical facts are missing, status is insufficient (not retrievable)."""
+def test_critical_facts_missing_alone_is_sufficient_with_warning() -> None:
+    """When only critical facts are missing but evidence is good, status is
+    sufficient with a warning. Missing facts is an input quality issue, not
+    an evidence sufficiency issue — should NOT force abstention."""
 
     hits = [_hit(citation_role="primary_legal_basis")]
     facts = ReviewFacts(
@@ -184,9 +186,12 @@ def test_critical_facts_missing_alone_is_insufficient() -> None:
     check = run_self_check(hits, facts, chunks_by_id)
 
     assert "critical_facts_missing" in check.triggered_reasons
-    # Only critical facts missing -> insufficient, no second retrieval
-    assert check.status == "insufficient"
+    # Only critical facts missing + good evidence -> sufficient (with warning)
+    assert check.status == "sufficient"
     assert check.second_retrieval_plan is None
+    # Issue is still recorded as a warning
+    assert len(check.issues) == 1
+    assert check.issues[0].issue_type == "critical_facts_missing"
 
 
 def test_critical_facts_with_other_issues_still_triggers_retrieval() -> None:
