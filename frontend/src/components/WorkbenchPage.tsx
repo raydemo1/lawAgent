@@ -14,7 +14,8 @@
  * Styling follows the Trust & Authority design system (authority navy +
  * trust gold). No purple, no gradients.
  */
-import type { KeyboardEvent } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import type { KeyboardEvent, ChangeEvent } from 'react';
 import type {
   CitationGroup,
   CitationUsage,
@@ -22,6 +23,7 @@ import type {
   ReviewFacts,
   ReviewResponse,
 } from '../types/api';
+import { uploadFile, ApiError } from '../api/client';
 import RiskBadge from './RiskBadge';
 
 export interface WorkbenchPageProps {
@@ -122,9 +124,15 @@ export default function WorkbenchPage({
   error,
   historyCount,
 }: WorkbenchPageProps): JSX.Element {
+  // File upload state
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadedName, setUploadedName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Submit is allowed only when not loading and at least one field has content.
   const canSubmit =
-    !loading && (question.trim() !== '' || material.trim() !== '');
+    !loading && !uploading && (question.trim() !== '' || material.trim() !== '');
 
   const handleSubmit = (): void => {
     if (!canSubmit) return;
@@ -138,6 +146,38 @@ export default function WorkbenchPage({
       handleSubmit();
     }
   };
+
+  const handleFileChange = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      setUploadError(null);
+      setUploadedName(null);
+
+      try {
+        const result = await uploadFile(file);
+        onMaterialChange(result.text);
+        setUploadedName(result.filename);
+      } catch (err) {
+        const msg =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : '文件上传失败';
+        setUploadError(msg);
+      } finally {
+        setUploading(false);
+        // Reset input so the same file can be re-selected
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      }
+    },
+    [onMaterialChange],
+  );
 
   const reviewResult = result?.review_result ?? null;
   const facts = result?.review_facts ?? null;
@@ -167,16 +207,58 @@ export default function WorkbenchPage({
           className="workbench__field"
           style={{ marginTop: 'var(--space-md)' }}
         >
-          <label className="workbench__label font-heading" htmlFor="wb-material">
-            待审查材料
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <label className="workbench__label font-heading" htmlFor="wb-material" style={{ marginBottom: 0 }}>
+              待审查材料
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {uploadedName && !uploading && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+                  已加载: {uploadedName}
+                </span>
+              )}
+              {uploading && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-muted-text, #64748b)' }}>
+                  正在提取文本...
+                </span>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.md,.pdf,.docx,.html,.htm,.json"
+                onChange={handleFileChange}
+                disabled={uploading || loading}
+                style={{ display: 'none' }}
+                id="wb-file-upload"
+              />
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || loading}
+                style={{
+                  fontSize: '0.75rem',
+                  padding: '4px 12px',
+                  opacity: uploading || loading ? 0.6 : 1,
+                  cursor: uploading || loading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                上传文件
+              </button>
+            </div>
+          </div>
+          {uploadError && (
+            <div className="error-box" style={{ marginBottom: '8px', fontSize: '0.8125rem' }}>
+              {uploadError}
+            </div>
+          )}
           <textarea
             id="wb-material"
             className="workbench__textarea"
             value={material}
             onChange={(e) => onMaterialChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="粘贴待审查的材料文本（隐私政策、数据处理说明、业务场景描述等）"
+            placeholder={'粘贴待审查的材料文本，或点击右上角「上传文件」上传文档（支持 .txt .md .pdf .docx）'}
             disabled={loading}
           />
         </div>

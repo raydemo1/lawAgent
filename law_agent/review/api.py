@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -121,6 +121,63 @@ def create_app(
         """Health check endpoint."""
 
         return HealthResponse(status="ok")
+
+    @app.post("/api/upload")
+    async def upload_file(file: UploadFile = File(...)) -> JSONResponse:
+        """Upload a document file and extract its text content.
+
+        Uses the project's existing docling-based text extraction pipeline
+        (law_agent.data.normalize._read_text) — no reinventing the wheel.
+
+        Supports: .txt, .md, .pdf, .docx, .html, .json, and image formats
+        Returns: {"filename": str, "text": str, "char_count": int, "parser": str}
+        """
+
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        # Read raw bytes and write to a temp file for _read_text
+        raw = await file.read()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        import tempfile as _tempfile
+
+        suffix = Path(file.filename).suffix
+        try:
+            with _tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(raw)
+                tmp_path = Path(tmp.name)
+
+            from law_agent.data.normalize import _read_text
+
+            parsed = _read_text(tmp_path, parser="auto")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to extract text from file: {exc}",
+            )
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except (OSError, NameError):
+                pass
+
+        text = parsed.text.strip()
+        if not text:
+            raise HTTPException(
+                status_code=400,
+                detail="No text content could be extracted from the file",
+            )
+
+        return JSONResponse(content={
+            "filename": file.filename,
+            "text": text,
+            "char_count": len(text),
+            "parser": parsed.parser,
+        })
 
     @app.post("/api/review", response_model=ReviewResponse)
     async def run_review(request: ReviewRequest) -> ReviewResponse:
