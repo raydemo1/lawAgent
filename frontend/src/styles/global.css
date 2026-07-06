@@ -832,6 +832,11 @@ textarea {
   flex-shrink: 0;
 }
 
+/* ---------- Utility: heading font for Chinese labels ---------- */
+.font-heading {
+  font-family: var(--font-heading);
+}
+
 /* ---------- Facts grid ---------- */
 .facts-grid {
   display: grid;

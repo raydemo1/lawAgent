@@ -149,7 +149,7 @@ export default function WorkbenchPage({
       {/* ---------------- Input section ---------------- */}
       <section className="card">
         <div className="workbench__field">
-          <label className="workbench__label" htmlFor="wb-question">
+          <label className="workbench__label font-heading" htmlFor="wb-question">
             审查问题
           </label>
           <input
@@ -167,7 +167,7 @@ export default function WorkbenchPage({
           className="workbench__field"
           style={{ marginTop: 'var(--space-md)' }}
         >
-          <label className="workbench__label" htmlFor="wb-material">
+          <label className="workbench__label font-heading" htmlFor="wb-material">
             待审查材料
           </label>
           <textarea

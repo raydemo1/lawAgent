@@ -30,7 +30,7 @@ export default function EvalPage(): JSX.Element {
       </header>
 
       <div className="card state-block">
-        <div className="state-block__title">评测看板即将上线</div>
+        <div className="state-block__title font-heading">评测看板即将上线</div>
         <div className="state-block__hint">
           详细的检索模式对比、召回指标与坏案例分析面板正在开发中。
           届时可在此查看 keyword 与 hybrid 模式的 Recall@3 / Recall@5 /

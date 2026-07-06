@@ -65,7 +65,7 @@ export default function Sidebar({
               <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
               <path d="M9 13h6M9 17h4" />
             </svg>
-            <span>研究工作台</span>
+            <span className="font-heading">研究工作台</span>
           </button>
 
           <button
@@ -90,7 +90,7 @@ export default function Sidebar({
               <path d="M3 3v18h18" />
               <path d="M7 14v4M12 9v9M17 5v13" />
             </svg>
-            <span>评测看板</span>
+            <span className="font-heading">评测看板</span>
           </button>
         </div>
       </nav>

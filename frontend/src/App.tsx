@@ -101,7 +101,7 @@ export default function App(): JSX.Element {
               }
               onClick={() => handlePageChange('workbench')}
             >
-              研究工作台
+              <span className="font-heading">研究工作台</span>
             </button>
             <button
               type="button"
@@ -111,7 +111,7 @@ export default function App(): JSX.Element {
               }
               onClick={() => handlePageChange('eval')}
             >
-              评测看板
+              <span className="font-heading">评测看板</span>
             </button>
           </div>
         </div>
