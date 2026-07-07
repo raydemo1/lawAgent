@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import Field
 
 from law_agent.review.schemas import StrictModel
@@ -60,20 +58,10 @@ class CaseMetricResult(StrictModel):
 # Aggregated metrics
 # ---------------------------------------------------------------------------
 
-EvalMode = Literal[
-    "keyword",
-    "hybrid",
-    "rule_baseline",
-    "local",
-    "service",
-    "llm",
-]
-
-
 class ModeMetrics(StrictModel):
     """Aggregated metrics for one retrieval mode."""
 
-    mode: EvalMode
+    mode: str
     mean_recall_at_3: float
     mean_recall_at_5: float
     mean_mrr_at_10: float

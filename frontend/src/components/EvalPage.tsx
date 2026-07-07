@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, getEvalStatus, getLatestEval, runEvaluation } from '../api/client'
-import type { CaseMetricResult, EvalJobResponse, EvalSummary, ModeMetrics } from '../types/api'
+import type {
+  CaseMetricResult,
+  EvalJobResponse,
+  EvalRetrievalMode,
+  EvalReviewMode,
+  EvalSummary,
+  ModeMetrics,
+} from '../types/api'
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
@@ -34,6 +41,69 @@ function metricItems(metrics: ModeMetrics): Array<[string, string]> {
     ['引用违规', String(metrics.total_citation_violations)],
     ['坏例', `${metrics.bad_case_count} / ${metrics.total_cases}`],
   ]
+}
+
+function evalMetricKey(retrievalMode: EvalRetrievalMode, reviewMode: EvalReviewMode): string {
+  return `retrieval=${retrievalMode},review=${reviewMode}`
+}
+
+function modeLabel(value: EvalRetrievalMode | EvalReviewMode): string {
+  if (value === 'service') return 'Service'
+  if (value === 'llm') return 'LLM'
+  return 'Local'
+}
+
+function ModeToggle<T extends EvalRetrievalMode | EvalReviewMode>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: T[]
+  onChange: (value: T) => void
+}): JSX.Element {
+  return (
+    <div>
+      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', marginBottom: 6 }}>
+        {label}
+      </div>
+      <div
+        style={{
+          display: 'inline-grid',
+          gridTemplateColumns: `repeat(${options.length}, minmax(72px, 1fr))`,
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-sm)',
+          overflow: 'hidden',
+          background: '#fff',
+        }}
+      >
+        {options.map((option) => {
+          const active = value === option
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(option)}
+              aria-pressed={active}
+              style={{
+                border: 0,
+                borderRight: option === options[options.length - 1] ? 0 : '1px solid var(--color-border)',
+                padding: '8px 12px',
+                background: active ? '#0f172a' : '#fff',
+                color: active ? '#fff' : '#334155',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {modeLabel(option)}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function MetricCard({ label, value }: { label: string; value: string }): JSX.Element {
@@ -80,6 +150,8 @@ export default function EvalPage(): JSX.Element {
   const [job, setJob] = useState<EvalJobResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  const [retrievalMode, setRetrievalMode] = useState<EvalRetrievalMode>('service')
+  const [reviewMode, setReviewMode] = useState<EvalReviewMode>('llm')
 
   useEffect(() => {
     let active = true
@@ -100,7 +172,11 @@ export default function EvalPage(): JSX.Element {
     setLoading(true)
     setError(null)
     try {
-      const next = await runEvaluation({ modes: ['service'], top_k: 10 })
+      const next = await runEvaluation({
+        retrieval_mode: retrievalMode,
+        review_mode: reviewMode,
+        top_k: 10,
+      })
       setJob(next)
       if (next.status === 'failed') {
         throw new ApiError(500, next.message ?? 'service 评测失败', '/api/eval/run')
@@ -131,33 +207,33 @@ export default function EvalPage(): JSX.Element {
           ? err.message
           : err instanceof Error
             ? err.message
-            : '运行 service 评测失败'
+            : '运行评测失败'
       setError(message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [retrievalMode, reviewMode])
 
-  const serviceMetrics = summary?.mode_metrics.service ?? null
+  const activeMetricKey = evalMetricKey(retrievalMode, reviewMode)
+  const activeMetrics = summary?.mode_metrics[activeMetricKey] ?? null
   const badCases = summary?.bad_cases ?? []
   const runningHint = job?.status === 'running' && job.started_at
     ? `任务 ${job.job_id ?? ''} · started ${job.started_at}`
-    : '将连接 Elasticsearch 与 pgvector，完整跑完黄金评测集。'
+    : `检索：${modeLabel(retrievalMode)} · 审查：${modeLabel(reviewMode)}。`
 
   return (
     <div className="workbench" style={{ maxWidth: 900, margin: '0 auto' }}>
       <header style={headerStyle}>
         <h1>评测看板</h1>
         <p style={headerDescStyle}>
-          当前前端只运行真实 service 检索评测：Elasticsearch + pgvector +
-          RRF 融合，不展示 local baseline 作为主结果。
+          评测入口只保留两个选择：检索使用 Service 或 Local，审查步骤使用 LLM 或 Local。
         </p>
       </header>
 
       <div className="card" style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-md)', alignItems: 'center', flexWrap: 'wrap' }}>
         <div>
           <div className="section-title" style={{ marginBottom: '2px' }}>
-            Service 评测
+            当前评测配置
           </div>
           <div style={{ color: '#64748b', fontSize: '0.875rem' }}>
             {summary
@@ -165,13 +241,27 @@ export default function EvalPage(): JSX.Element {
               : '尚无缓存结果，点击运行评测。'}
           </div>
         </div>
+        <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+          <ModeToggle
+            label="检索"
+            value={retrievalMode}
+            options={['service', 'local']}
+            onChange={setRetrievalMode}
+          />
+          <ModeToggle
+            label="审查"
+            value={reviewMode}
+            options={['llm', 'local']}
+            onChange={setReviewMode}
+          />
+        </div>
         <button
           type="button"
           className="btn-primary"
           onClick={handleRun}
           disabled={loading}
         >
-          {loading ? '评测运行中...' : '运行 service 评测'}
+          {loading ? '评测运行中...' : '运行评测'}
         </button>
       </div>
 
@@ -192,17 +282,17 @@ export default function EvalPage(): JSX.Element {
             style={{ margin: '0 auto var(--space-md)' }}
             aria-hidden="true"
           />
-          <div className="state-block__title">正在运行真实 service 评测</div>
+          <div className="state-block__title">正在运行评测</div>
           <div className="state-block__hint">
             {runningHint}
           </div>
         </section>
-      ) : serviceMetrics ? (
+      ) : activeMetrics ? (
         <>
           <section className="card">
             <div className="section-title">核心指标</div>
             <div style={gridStyle}>
-              {metricItems(serviceMetrics).map(([label, value]) => (
+              {metricItems(activeMetrics).map(([label, value]) => (
                 <MetricCard key={label} label={label} value={value} />
               ))}
             </div>
@@ -211,7 +301,7 @@ export default function EvalPage(): JSX.Element {
           <section className="card">
             <div className="section-title">坏例</div>
             {badCases.length === 0 ? (
-              <div className="state-block__hint">本次 service 评测没有坏例。</div>
+              <div className="state-block__hint">本次评测没有坏例。</div>
             ) : (
               badCases.map((item) => (
                 <BadCaseRow key={item.case_id} item={item} />
@@ -221,9 +311,9 @@ export default function EvalPage(): JSX.Element {
         </>
       ) : (
         <section className="card state-block">
-          <div className="state-block__title">暂无 service 评测结果</div>
+          <div className="state-block__title">暂无当前配置的评测结果</div>
           <div className="state-block__hint">
-            点击上方按钮运行真实 service 评测后，将展示 Recall、MRR、引用违规和坏例。
+            点击上方按钮运行评测后，将展示 Recall、MRR、引用违规和坏例。
           </div>
         </section>
       )}

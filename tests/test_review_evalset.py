@@ -332,12 +332,13 @@ def test_run_evaluation_with_fixture_corpus(tmp_path) -> None:
         chunks_path=chunks_path,
         scenarios=scenarios,
         top_k=5,
+        retrieval_mode="local",
+        review_mode="local",
     )
 
-    assert "rule_baseline" in summary.mode_metrics
-    assert "local" in summary.mode_metrics
-    assert summary.mode_metrics["rule_baseline"].total_cases == 2
-    assert summary.mode_metrics["local"].total_cases == 2
+    key = "retrieval=local,review=local"
+    assert key in summary.mode_metrics
+    assert summary.mode_metrics[key].total_cases == 2
 
 
 def test_format_summary_text_contains_key_metrics() -> None:
@@ -349,8 +350,8 @@ def test_format_summary_text_contains_key_metrics() -> None:
         chunks_path="test.jsonl",
         cases_path="default",
         mode_metrics={
-            "rule_baseline": ModeMetrics(
-                mode="rule_baseline",
+            "retrieval=local,review=local": ModeMetrics(
+                mode="retrieval=local,review=local",
                 mean_recall_at_3=0.7500,
                 mean_recall_at_5=0.8000,
                 mean_mrr_at_10=0.9000,
@@ -365,7 +366,7 @@ def test_format_summary_text_contains_key_metrics() -> None:
 
     text = format_summary_text(summary)
 
-    assert "RULE_BASELINE mode" in text
+    assert "RETRIEVAL=LOCAL,REVIEW=LOCAL mode" in text
     assert "Recall@3" in text
     assert "MRR@10" in text
     assert "Bad cases" in text

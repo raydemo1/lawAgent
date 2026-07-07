@@ -68,14 +68,11 @@ export type RetrieverName =
   | 'elasticsearch'
   | 'pgvector';
 
-/** Evaluation mode (retriever strategy under test). */
-export type EvalMode =
-  | 'keyword'
-  | 'hybrid'
-  | 'rule_baseline'
-  | 'local'
-  | 'service'
-  | 'llm';
+/** Evaluation retrieval backend under test. */
+export type EvalRetrievalMode = 'service' | 'local';
+
+/** Evaluation review owner under test. */
+export type EvalReviewMode = 'llm' | 'local';
 
 // ---------------------------------------------------------------------------
 // Review domain models
@@ -289,7 +286,7 @@ export interface CaseMetricResult {
  * Matches `ModeMetrics` in `law_agent/review/evalset/schemas.py`.
  */
 export interface ModeMetrics {
-  mode: EvalMode;
+  mode: string;
   mean_recall_at_3: number;
   mean_recall_at_5: number;
   mean_mrr_at_10: number;
@@ -310,7 +307,7 @@ export interface EvalSummary {
   generated_at: string;
   chunks_path: string;
   cases_path: string;
-  /** Aggregated metrics keyed by mode name (e.g. "keyword", "hybrid"). */
+  /** Aggregated metrics keyed by explicit eval axes. */
   mode_metrics: Record<string, ModeMetrics>;
   bad_cases: CaseMetricResult[];
   /** Per-case results keyed by mode name. */
@@ -320,7 +317,8 @@ export interface EvalSummary {
 /** Request body for `POST /api/eval/run`. */
 export interface EvalRunOptions {
   chunks_path?: string;
-  modes?: EvalMode[];
+  retrieval_mode?: EvalRetrievalMode;
+  review_mode?: EvalReviewMode;
   top_k?: number;
 }
 

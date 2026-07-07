@@ -52,7 +52,8 @@ def test_keyword_mode_produces_real_risk_level(tmp_path: Path) -> None:
     result = _run_single_case(
         scenario,
         chunks_path,
-        mode="keyword",
+        retrieval_mode="local",
+        review_mode="local",
         top_k=5,
     )
 
@@ -83,7 +84,8 @@ def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypa
     _run_single_case(
         scenario,
         chunks_path,
-        mode="hybrid",
+        retrieval_mode="local",
+        review_mode="local",
         top_k=5,
     )
 
@@ -114,7 +116,8 @@ def test_service_eval_mode_fails_fast_without_service_backend(tmp_path: Path) ->
             run_evaluation(
                 chunks_path=chunks_path,
                 scenarios=[get_default_scenarios()[0]],
-                modes=["service"],
+                retrieval_mode="service",
+                review_mode="local",
             )
         return
 

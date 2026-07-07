@@ -170,7 +170,8 @@ def _cmd_eval(args: argparse.Namespace) -> int:
         summary = run_evaluation(
             chunks_path=Path(args.chunks),
             top_k=args.top_k,
-            modes=args.mode,
+            retrieval_mode=args.retrieval_mode,
+            review_mode=args.review_mode,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -347,11 +348,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.add_argument("--top-k", type=int, default=10)
     eval_parser.add_argument(
-        "--mode",
-        action="append",
-        choices=["rule_baseline", "local", "service", "llm", "keyword", "hybrid"],
-        default=None,
-        help="Eval mode to run. Repeat for multiple modes. Defaults to rule_baseline and local.",
+        "--retrieval-mode",
+        choices=["service", "local"],
+        default="service",
+        help="Retrieval backend for eval. Defaults to service.",
+    )
+    eval_parser.add_argument(
+        "--review-mode",
+        choices=["llm", "local"],
+        default="llm",
+        help="Review owner for eval. Defaults to llm.",
     )
     eval_parser.add_argument(
         "--output",
@@ -387,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--mode",
         choices=["rule_baseline", "llm"],
-        default="rule_baseline",
+        default="llm",
         help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
     )
     serve.add_argument(

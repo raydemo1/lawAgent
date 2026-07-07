@@ -26,7 +26,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from law_agent.review.evalset.runner import run_evaluation
-from law_agent.review.evalset.schemas import EvalMode, EvalSummary
+from law_agent.review.evalset.runner import ReviewEvalMode, RetrievalEvalMode
+from law_agent.review.evalset.schemas import EvalSummary
 from law_agent.review.io import read_review_results, read_retrieval_traces
 from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
@@ -80,9 +81,13 @@ class EvalRunRequest(BaseModel):
     """Request body for POST /api/eval/run (all fields optional)."""
 
     chunks_path: str | None = Field(default=None, description="Custom path to chunks.jsonl")
-    modes: list[EvalMode] | None = Field(
-        default=None,
-        description="Eval modes to run, e.g. rule_baseline/local/service/llm",
+    retrieval_mode: RetrievalEvalMode = Field(
+        default="service",
+        description="Retrieval backend under test: service or local",
+    )
+    review_mode: ReviewEvalMode = Field(
+        default="llm",
+        description="Review owner under test: llm or local",
     )
     top_k: int = Field(default=10, ge=1, le=100, description="Retrieval top_k")
 
@@ -320,7 +325,8 @@ def create_app(
         chunks = (
             Path(request.chunks_path) if request and request.chunks_path else app.state.chunks_path
         )
-        modes = request.modes if request else None
+        retrieval_mode = request.retrieval_mode if request else "service"
+        review_mode = request.review_mode if request else "llm"
         top_k = request.top_k if request else 10
 
         with app.state.eval_lock:
@@ -338,7 +344,7 @@ def create_app(
 
         thread = threading.Thread(
             target=_run_eval_job,
-            args=(app, job_id, chunks, modes, top_k),
+            args=(app, job_id, chunks, retrieval_mode, review_mode, top_k),
             daemon=True,
         )
         thread.start()
@@ -364,11 +370,17 @@ def _run_eval_job(
     app: FastAPI,
     job_id: str,
     chunks: Path,
-    modes: list[EvalMode] | None,
+    retrieval_mode: RetrievalEvalMode,
+    review_mode: ReviewEvalMode,
     top_k: int,
 ) -> None:
     try:
-        summary = run_evaluation(chunks_path=chunks, modes=modes, top_k=top_k)
+        summary = run_evaluation(
+            chunks_path=chunks,
+            retrieval_mode=retrieval_mode,
+            review_mode=review_mode,
+            top_k=top_k,
+        )
     except Exception as exc:  # noqa: BLE001 - surfaced through job status
         with app.state.eval_lock:
             if app.state.eval_job.get("job_id") == job_id:

@@ -29,9 +29,12 @@ class LLMConfig:
     """OpenAI-compatible chat completion configuration."""
 
     base_url: str
+    beta_base_url: str
     api_key: str | None
     model: str
     timeout_seconds: int
+    structured_output_mode: Literal["json_object", "strict_tool"]
+    reasoning_effort: Literal["none", "low", "medium", "high", "max"]
 
     @property
     def enabled(self) -> bool:
@@ -42,12 +45,30 @@ def load_llm_config() -> LLMConfig:
     """Load LLM settings from environment variables."""
 
     load_env_file()
+    base_url = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "https://api.deepseek.com").rstrip("/")
     timeout = os.getenv("OPENAI_COMPATIBLE_TIMEOUT_SECONDS", "60")
+    structured_output_mode = os.getenv(
+        "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT", "strict_tool"
+    )
+    if structured_output_mode not in ("json_object", "strict_tool"):
+        raise RuntimeError(
+            "OPENAI_COMPATIBLE_STRUCTURED_OUTPUT must be json_object or strict_tool"
+        )
+    reasoning_effort = os.getenv("OPENAI_COMPATIBLE_REASONING_EFFORT", "none")
+    if reasoning_effort not in ("none", "low", "medium", "high", "max"):
+        raise RuntimeError(
+            "OPENAI_COMPATIBLE_REASONING_EFFORT must be none, low, medium, high, or max"
+        )
     return LLMConfig(
-        base_url=os.getenv("OPENAI_COMPATIBLE_BASE_URL", "https://api.deepseek.com").rstrip("/"),
+        base_url=base_url,
+        beta_base_url=os.getenv(
+            "OPENAI_COMPATIBLE_BETA_BASE_URL", f"{base_url}/beta"
+        ).rstrip("/"),
         api_key=os.getenv("OPENAI_COMPATIBLE_API_KEY") or None,
-        model=os.getenv("OPENAI_COMPATIBLE_MODEL", "deepseek-v4-flash"),
+        model=os.getenv("OPENAI_COMPATIBLE_MODEL", "deepseek-v4-pro"),
         timeout_seconds=int(timeout),
+        structured_output_mode=structured_output_mode,  # type: ignore[arg-type]
+        reasoning_effort=reasoning_effort,  # type: ignore[arg-type]
     )
 
 
@@ -57,6 +78,8 @@ def require_llm_config() -> LLMConfig:
     config = load_llm_config()
     if not config.base_url:
         raise RuntimeError("OPENAI_COMPATIBLE_BASE_URL is required")
+    if config.structured_output_mode == "strict_tool" and not config.beta_base_url:
+        raise RuntimeError("OPENAI_COMPATIBLE_BETA_BASE_URL is required for strict_tool")
     if not config.api_key or config.api_key == "sk-your-deepseek-api-key":
         raise RuntimeError("OPENAI_COMPATIBLE_API_KEY is required")
     if not config.model:

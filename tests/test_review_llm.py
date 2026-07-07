@@ -33,9 +33,11 @@ class FakeClient:
         self.outputs = list(outputs or [])
         self.errors = list(errors or [])
         self.calls: list[list[ChatMessage]] = []
+        self.kwargs: list[dict] = []
 
-    def chat_json(self, messages: list[ChatMessage]) -> dict:
+    def chat_json(self, messages: list[ChatMessage], **kwargs) -> dict:
         self.calls.append(messages)
+        self.kwargs.append(kwargs)
         if self.errors:
             raise self.errors.pop(0)
         return self.outputs.pop(0)
@@ -110,6 +112,9 @@ def test_structured_node_retries_validation_failure() -> None:
 
     assert facts.cross_border_transfer is True
     assert len(client.calls) == 2
+    assert client.kwargs[0]["output_model"] is ReviewFacts
+    assert client.kwargs[0]["tool_name"] == "fact_extraction"
+    assert "validation_errors=" in client.calls[1][-1].content
 
 
 def test_structured_node_exhaustion_returns_review_failed() -> None:

@@ -89,13 +89,28 @@ class StructuredLLMNode(Generic[ModelT]):
 
         for attempt in range(1, attempts_allowed + 1):
             try:
-                raw = self.client.chat_json(list(messages))
+                raw = self.client.chat_json(
+                    list(messages),
+                    output_model=self.output_model,
+                    tool_name=self.node_name,
+                )
                 return self.output_model.model_validate(raw, strict=True)
             except ValidationError as exc:
                 last_reason = "pydantic_validation_failed"
                 last_message = (
                     f"{self.node_name} output did not match the required JSON schema"
                 )
+                messages = [
+                    *messages,
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "上一轮 JSON 未通过 Pydantic 严格校验。"
+                            "请只重新输出符合 schema 的 JSON，不要解释。"
+                            f" validation_errors={exc.errors()}"
+                        ),
+                    ),
+                ]
                 if attempt == attempts_allowed:
                     raise ReviewWorkflowFailed(
                         failed_node=self.node_name,

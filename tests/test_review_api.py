@@ -245,7 +245,10 @@ def test_eval_latest_returns_404_when_not_run(client: TestClient) -> None:
 
 def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     # First trigger an eval run
-    run_response = client.post("/api/eval/run")
+    run_response = client.post(
+        "/api/eval/run",
+        json={"retrieval_mode": "local", "review_mode": "local"},
+    )
     assert run_response.status_code == 200
     assert run_response.json()["status"] in ("running", "succeeded")
     _wait_for_eval_job(client)
@@ -255,26 +258,33 @@ def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "mode_metrics" in data
-    assert "rule_baseline" in data["mode_metrics"]
-    assert "local" in data["mode_metrics"]
+    assert "retrieval=local,review=local" in data["mode_metrics"]
 
 
-def test_eval_run_accepts_modes_and_top_k(
+def test_eval_run_accepts_retrieval_and_review_modes(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """POST /api/eval/run forwards explicit modes/top_k to the runner."""
+    """POST /api/eval/run forwards explicit retrieval/review modes and top_k."""
 
     captured = {}
 
-    def fake_run_evaluation(*, chunks_path, modes=None, top_k=10, **kwargs):
+    def fake_run_evaluation(
+        *,
+        chunks_path,
+        retrieval_mode="service",
+        review_mode="llm",
+        top_k=10,
+        **kwargs,
+    ):
         captured["chunks_path"] = chunks_path
-        captured["modes"] = modes
+        captured["retrieval_mode"] = retrieval_mode
+        captured["review_mode"] = review_mode
         captured["top_k"] = top_k
         from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
 
         metrics = ModeMetrics(
-            mode="service",
+            mode="retrieval=service,review=llm",
             mean_recall_at_3=0.5,
             mean_recall_at_5=0.5,
             mean_mrr_at_10=0.5,
@@ -288,22 +298,26 @@ def test_eval_run_accepts_modes_and_top_k(
             generated_at="2026-07-07T00:00:00+00:00",
             chunks_path=str(chunks_path),
             cases_path="default",
-            mode_metrics={"service": metrics},
+            mode_metrics={"retrieval=service,review=llm": metrics},
             bad_cases=[],
-            all_case_results={"service": []},
+            all_case_results={"retrieval=service,review=llm": []},
         )
 
     monkeypatch.setattr("law_agent.review.api.run_evaluation", fake_run_evaluation)
 
-    response = client.post("/api/eval/run", json={"modes": ["service"], "top_k": 7})
+    response = client.post(
+        "/api/eval/run",
+        json={"retrieval_mode": "service", "review_mode": "llm", "top_k": 7},
+    )
 
     assert response.status_code == 200
     _wait_for_eval_job(client)
-    assert captured["modes"] == ["service"]
+    assert captured["retrieval_mode"] == "service"
+    assert captured["review_mode"] == "llm"
     assert captured["top_k"] == 7
     latest = client.get("/api/eval/latest")
     assert latest.status_code == 200
-    assert "service" in latest.json()["mode_metrics"]
+    assert "retrieval=service,review=llm" in latest.json()["mode_metrics"]
 
 
 def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
@@ -321,7 +335,10 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     client2 = TestClient(app2)
 
     # Run eval on app1 — this caches the result in app1's state only.
-    run_response = client1.post("/api/eval/run")
+    run_response = client1.post(
+        "/api/eval/run",
+        json={"retrieval_mode": "local", "review_mode": "local"},
+    )
     assert run_response.status_code == 200
     _wait_for_eval_job(client1)
 
