@@ -226,3 +226,28 @@ def test_standard_contract_transfer_to_foreign_affiliate_is_cross_border() -> No
     assert facts.cross_border_transfer is True
     assert facts.overseas_recipient == "德国"
     assert "员工个人信息" in facts.data_types
+
+
+def test_sync_to_overseas_recipient_is_cross_border() -> None:
+    material = (
+        "集团要把境内员工姓名、手机号、邮箱同步到德国 HR 系统，"
+        "全年涉及员工约3000人，已在员工告知书里说明用途。"
+    )
+
+    facts = extract_facts(material)
+
+    assert facts.cross_border_transfer is True
+    assert facts.overseas_recipient == "德国"
+    assert "姓名" in facts.data_types
+
+
+def test_sync_to_foreign_team_is_cross_border() -> None:
+    material = (
+        "业务部门计划把订单记录、浏览行为和用户画像同步给美国 BI 团队。"
+        "平台累计注册用户约120万人，近期一年预计涉及约12万人个人信息。"
+    )
+
+    facts = extract_facts(material)
+
+    assert facts.cross_border_transfer is True
+    assert facts.overseas_recipient == "美国"

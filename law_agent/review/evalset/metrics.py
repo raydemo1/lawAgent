@@ -87,6 +87,19 @@ def count_duplicate_sources_at_k(hits: list[RetrievalHit], k: int) -> int:
     return len(top) - len({hit.source_id for hit in top})
 
 
+def ordered_unique_sources(hits: list[RetrievalHit]) -> list[str]:
+    """Return source IDs in result order, collapsing duplicates."""
+
+    seen: set[str] = set()
+    sources: list[str] = []
+    for hit in hits:
+        if hit.source_id in seen:
+            continue
+        seen.add(hit.source_id)
+        sources.append(hit.source_id)
+    return sources
+
+
 def count_citation_violations(
     hits: list[RetrievalHit] | None = None,
     must_not_cite_as_clause: list[str] | None = None,
@@ -200,8 +213,6 @@ def evaluate_case(
     if citation_violations > 0:
         bad_reasons.append(f"citation_violations={citation_violations}")
 
-    actual_sources = list({h.source_id for h in hits})
-
     return CaseMetricResult(
         case_id=scenario.case_id,
         recall_at_3=round(recall_3, 4),
@@ -213,7 +224,7 @@ def evaluate_case(
         citation_violation_count=citation_violations,
         abstention_correct=abstention_correct,
         second_retrieval_correct=second_retrieval_correct,
-        actual_sources=actual_sources,
+        actual_sources=ordered_unique_sources(hits),
         missing_sources=missing_5,
         is_bad_case=len(bad_reasons) > 0,
         bad_reasons=bad_reasons,

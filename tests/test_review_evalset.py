@@ -10,6 +10,7 @@ from law_agent.review.evalset.metrics import (
     distinct_source_hits_at_k,
     count_citation_violations,
     evaluate_case,
+    ordered_unique_sources,
 )
 from law_agent.review.evalset.schemas import CaseMetricResult, EvalScenario
 from law_agent.review.schemas import RetrievalHit
@@ -110,6 +111,17 @@ def test_source_pool_and_distinct_source_metrics() -> None:
     assert missing == ["s3"]
     assert [hit.source_id for hit in distinct] == ["s1", "s2"]
     assert count_duplicate_sources_at_k(hits, 3) == 1
+
+
+def test_ordered_unique_sources_preserves_result_order() -> None:
+    hits = [
+        _hit(source_id="s2", chunk_id="c1", rank=0),
+        _hit(source_id="s1", chunk_id="c2", rank=1),
+        _hit(source_id="s2", chunk_id="c3", rank=2),
+        _hit(source_id="s3", chunk_id="c4", rank=3),
+    ]
+
+    assert ordered_unique_sources(hits) == ["s2", "s1", "s3"]
 
 
 # ---------------------------------------------------------------------------

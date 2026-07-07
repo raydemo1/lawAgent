@@ -28,7 +28,8 @@ FactsExtractor = Callable[[str, str | None], ReviewFacts]
 
 _CROSS_BORDER_TERMS: tuple[str, ...] = (
     "境外", "出境", "跨境", "海外", "国外", "传输至", "传输到",
-    "发送给", "发送至", "传至", "提供给", "共享给",
+    "发送给", "发送至", "传至", "提供给", "共享给", "同步给",
+    "同步到", "同步至",
 )
 
 _OVERSEAS_RECIPIENTS: dict[str, str] = {
@@ -56,6 +57,7 @@ _OVERSEAS_RECIPIENTS: dict[str, str] = {
 
 _DATA_TYPE_TERMS: dict[str, str] = {
     "个人信息": "个人信息",
+    "姓名": "姓名",
     "客户信息": "客户个人信息",
     "客户数据": "客户个人信息",
     "员工信息": "员工个人信息",
@@ -164,7 +166,7 @@ _THRESHOLD_TERMS: tuple[str, ...] = (
 )
 
 _TRANSFER_VERBS: tuple[str, ...] = (
-    "传输", "发送", "提供", "共享", "传送", "转移", "访问",
+    "传输", "发送", "提供", "共享", "传送", "转移", "访问", "同步",
 )
 
 
