@@ -15,6 +15,8 @@ Endpoints:
 from __future__ import annotations
 
 import tempfile
+import threading
+import uuid
 from pathlib import Path
 from typing import Any, Literal
 
@@ -85,6 +87,16 @@ class EvalRunRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=100, description="Retrieval top_k")
 
 
+class EvalJobResponse(BaseModel):
+    """Current state of the background evaluation job."""
+
+    job_id: str | None = None
+    status: Literal["idle", "running", "succeeded", "failed"] = "idle"
+    message: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -124,6 +136,14 @@ def create_app(
     app.state.retrieval_backend = retrieval_backend
     # Per-app eval cache so two app instances never share eval results.
     app.state.eval_cache: dict[str, EvalSummary | None] = {"latest": None}
+    app.state.eval_job: dict[str, Any] = {
+        "job_id": None,
+        "status": "idle",
+        "message": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+    app.state.eval_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -294,32 +314,41 @@ def create_app(
         return JSONResponse(content=cached.model_dump())
 
     @app.post("/api/eval/run")
-    async def trigger_eval(request: EvalRunRequest | None = None) -> JSONResponse:
-        """Trigger evaluation and cache the result.
-
-        Returns the full evaluation summary.
-        """
+    async def trigger_eval(request: EvalRunRequest | None = None) -> EvalJobResponse:
+        """Start evaluation in the background and return immediately."""
 
         chunks = (
             Path(request.chunks_path) if request and request.chunks_path else app.state.chunks_path
         )
+        modes = request.modes if request else None
+        top_k = request.top_k if request else 10
 
-        try:
-            summary = run_evaluation(
-                chunks_path=chunks,
-                modes=request.modes if request else None,
-                top_k=request.top_k if request else 10,
-            )
-        except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"unexpected error during evaluation: {exc}",
-            )
+        with app.state.eval_lock:
+            if app.state.eval_job["status"] == "running":
+                return EvalJobResponse.model_validate(app.state.eval_job)
 
-        app.state.eval_cache["latest"] = summary
-        return JSONResponse(content=summary.model_dump())
+            job_id = uuid.uuid4().hex
+            app.state.eval_job = {
+                "job_id": job_id,
+                "status": "running",
+                "message": None,
+                "started_at": _now_iso(),
+                "finished_at": None,
+            }
+
+        thread = threading.Thread(
+            target=_run_eval_job,
+            args=(app, job_id, chunks, modes, top_k),
+            daemon=True,
+        )
+        thread.start()
+        return EvalJobResponse.model_validate(app.state.eval_job)
+
+    @app.get("/api/eval/status")
+    async def get_eval_status() -> EvalJobResponse:
+        """Return the current background evaluation job state."""
+
+        return EvalJobResponse.model_validate(app.state.eval_job)
 
     return app
 
@@ -329,6 +358,44 @@ def _is_json_request(request: Request) -> bool:
 
     content_type = request.headers.get("content-type", "").lower()
     return "application/json" in content_type
+
+
+def _run_eval_job(
+    app: FastAPI,
+    job_id: str,
+    chunks: Path,
+    modes: list[EvalMode] | None,
+    top_k: int,
+) -> None:
+    try:
+        summary = run_evaluation(chunks_path=chunks, modes=modes, top_k=top_k)
+    except Exception as exc:  # noqa: BLE001 - surfaced through job status
+        with app.state.eval_lock:
+            if app.state.eval_job.get("job_id") == job_id:
+                app.state.eval_job = {
+                    **app.state.eval_job,
+                    "status": "failed",
+                    "message": str(exc),
+                    "finished_at": _now_iso(),
+                }
+        return
+
+    with app.state.eval_lock:
+        if app.state.eval_job.get("job_id") != job_id:
+            return
+        app.state.eval_cache["latest"] = summary
+        app.state.eval_job = {
+            **app.state.eval_job,
+            "status": "succeeded",
+            "message": None,
+            "finished_at": _now_iso(),
+        }
+
+
+def _now_iso() -> str:
+    from law_agent.review.ids import utc_now_iso
+
+    return utc_now_iso()
 
 
 # ---------------------------------------------------------------------------

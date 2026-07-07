@@ -446,7 +446,7 @@ def build_service_adapters(
         )
         vector_adapter = PgVectorAdapter(
             search_fn=make_pgvector_search_fn(conn, config.postgres.table_name),
-            embed_query=embeddings.embed_query,
+            embed_texts=embeddings.embed_texts,
         )
 
         # Fail-fast: both adapters must be present.

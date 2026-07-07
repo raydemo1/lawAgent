@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, getLatestEval, runEvaluation } from '../api/client'
-import type { CaseMetricResult, EvalSummary, ModeMetrics } from '../types/api'
+import { ApiError, getEvalStatus, getLatestEval, runEvaluation } from '../api/client'
+import type { CaseMetricResult, EvalJobResponse, EvalSummary, ModeMetrics } from '../types/api'
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
@@ -77,6 +77,7 @@ function BadCaseRow({ item }: { item: CaseMetricResult }): JSX.Element {
 
 export default function EvalPage(): JSX.Element {
   const [summary, setSummary] = useState<EvalSummary | null>(null)
+  const [job, setJob] = useState<EvalJobResponse | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -100,7 +101,30 @@ export default function EvalPage(): JSX.Element {
     setError(null)
     try {
       const next = await runEvaluation({ modes: ['service'], top_k: 10 })
-      setSummary(next)
+      setJob(next)
+      if (next.status === 'failed') {
+        throw new ApiError(500, next.message ?? 'service 评测失败', '/api/eval/run')
+      }
+      if (next.status === 'succeeded') {
+        const latest = await getLatestEval()
+        setSummary(latest)
+        return
+      }
+      let latestJob = next
+      while (latestJob.status === 'running') {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000))
+        latestJob = await getEvalStatus()
+        setJob(latestJob)
+      }
+      if (latestJob.status === 'failed') {
+        throw new ApiError(
+          500,
+          latestJob.message ?? 'service 评测失败',
+          '/api/eval/status',
+        )
+      }
+      const latest = await getLatestEval()
+      setSummary(latest)
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -116,6 +140,9 @@ export default function EvalPage(): JSX.Element {
 
   const serviceMetrics = summary?.mode_metrics.service ?? null
   const badCases = summary?.bad_cases ?? []
+  const runningHint = job?.status === 'running' && job.started_at
+    ? `任务 ${job.job_id ?? ''} · started ${job.started_at}`
+    : '将连接 Elasticsearch 与 pgvector，完整跑完黄金评测集。'
 
   return (
     <div className="workbench" style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -167,7 +194,7 @@ export default function EvalPage(): JSX.Element {
           />
           <div className="state-block__title">正在运行真实 service 评测</div>
           <div className="state-block__hint">
-            将连接 Elasticsearch 与 pgvector，完整跑完黄金评测集。
+            {runningHint}
           </div>
         </section>
       ) : serviceMetrics ? (

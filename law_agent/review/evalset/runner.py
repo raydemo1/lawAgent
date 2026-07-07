@@ -18,6 +18,7 @@ from law_agent.review.evalset.schemas import (
     ModeMetrics,
 )
 from law_agent.review.evidence import run_self_check
+from law_agent.review.facts import extract_facts
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
     read_review_cases,
@@ -27,6 +28,7 @@ from law_agent.review.io import (
     write_review_results,
 )
 from law_agent.review.result_builder import build_review_result
+from law_agent.review.query_planner import plan_queries
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, load_corpus
 from law_agent.review.service import create_review_case, run_hybrid_retrieval, run_keyword_retrieval
 
@@ -65,6 +67,7 @@ def run_evaluation(
         from law_agent.review.retrieval.service_backends import build_service_adapters
 
         service_adapters = build_service_adapters(require_service_config())
+        _prewarm_service_eval_queries(service_adapters, scenarios)
 
     try:
         results_by_mode: dict[str, list[CaseMetricResult]] = {}
@@ -102,6 +105,24 @@ def run_evaluation(
         bad_cases=all_bad,
         all_case_results=results_by_mode,
     )
+
+
+def _prewarm_service_eval_queries(service_adapters: object, scenarios: list[EvalScenario]) -> None:
+    """Embed all deterministic service-eval queries once before case execution."""
+
+    vector = getattr(service_adapters, "vector", None)
+    prewarm = getattr(vector, "prewarm_queries", None)
+    if prewarm is None:
+        raise RuntimeError("service vector adapter must support prewarm_queries")
+
+    queries: list[str] = []
+    for scenario in scenarios:
+        facts = extract_facts(scenario.material_text, scenario.question)
+        queries.extend(
+            query.text
+            for query in plan_queries(scenario.question, facts, scenario.material_text)
+        )
+    prewarm(queries)
 
 
 def _run_single_case(

@@ -15,6 +15,7 @@
  */
 
 import type {
+  EvalJobResponse,
   EvalRunOptions,
   EvalSummary,
   HealthResponse,
@@ -300,11 +301,17 @@ export async function submitReview(
  */
 export async function runEvaluation(
   options: EvalRunOptions = { modes: ['service'], top_k: 10 },
-): Promise<EvalSummary> {
-  return request<EvalSummary>('/api/eval/run', {
+): Promise<EvalJobResponse> {
+  return request<EvalJobResponse>('/api/eval/run', {
     method: 'POST',
     body: JSON.stringify(options),
-    timeoutMs: 900_000,
+  });
+}
+
+export async function getEvalStatus(): Promise<EvalJobResponse> {
+  return request<EvalJobResponse>('/api/eval/status', {
+    method: 'GET',
+    timeoutMs: 10_000,
   });
 }
 

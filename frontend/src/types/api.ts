@@ -323,3 +323,13 @@ export interface EvalRunOptions {
   modes?: EvalMode[];
   top_k?: number;
 }
+
+export type EvalJobStatus = 'idle' | 'running' | 'succeeded' | 'failed';
+
+export interface EvalJobResponse {
+  job_id: string | null;
+  status: EvalJobStatus;
+  message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from law_agent.data.schemas import Chunk
@@ -235,6 +236,17 @@ class KeywordRetriever:
                 )
             )
         return hits
+
+    def search_many(
+        self,
+        queries: Sequence[tuple[str, RetrievalQueryType | None]],
+        *,
+        top_k: int = 10,
+    ) -> list[list[RetrievalHit]]:
+        return [
+            self.search(query, top_k=top_k, query_type=query_type)
+            for query, query_type in queries
+        ]
 
 
 def merge_hits_by_chunk_id(

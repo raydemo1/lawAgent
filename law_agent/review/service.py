@@ -314,16 +314,17 @@ def run_hybrid_retrieval(
     vector_hits_per_query: list[list[RetrievalHit]] = []
     query_types: list[str | None] = []
 
-    for query in target_trace.queries:
-        query_types.append(query.query_type)
-        kw_hits = keyword_retriever.search(
-            query.text, top_k=top_k, query_type=query.query_type
-        )
-        vec_hits = vector_retriever.search(
-            query.text, top_k=top_k, query_type=query.query_type
-        )
-        keyword_hits_per_query.append(kw_hits)
-        vector_hits_per_query.append(vec_hits)
+    retrieval_queries = [
+        (query.text, query.query_type)
+        for query in target_trace.queries
+    ]
+    query_types.extend(query_type for _text, query_type in retrieval_queries)
+    keyword_hits_per_query = keyword_retriever.search_many(
+        retrieval_queries, top_k=top_k
+    )
+    vector_hits_per_query = vector_retriever.search_many(
+        retrieval_queries, top_k=top_k
+    )
 
     merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=top_k)
     merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=top_k)
@@ -357,16 +358,16 @@ def run_hybrid_retrieval(
         expanded_top_k = plan.increased_top_k
 
         # Run second retrieval with expanded queries
-        all_queries = list(target_trace.queries) + plan.expanded_queries
-        kw2_per_query: list[list[RetrievalHit]] = []
-        vec2_per_query: list[list[RetrievalHit]] = []
-        for q in all_queries:
-            kw2_per_query.append(
-                keyword_retriever.search(q.text, top_k=expanded_top_k, query_type=q.query_type)
-            )
-            vec2_per_query.append(
-                vector_retriever.search(q.text, top_k=expanded_top_k, query_type=q.query_type)
-            )
+        all_queries = [
+            (query.text, query.query_type)
+            for query in list(target_trace.queries) + plan.expanded_queries
+        ]
+        kw2_per_query = keyword_retriever.search_many(
+            all_queries, top_k=expanded_top_k
+        )
+        vec2_per_query = vector_retriever.search_many(
+            all_queries, top_k=expanded_top_k
+        )
 
         merged_kw2 = merge_hits_by_chunk_id(kw2_per_query, top_k=expanded_top_k)
         merged_vec2 = merge_hits_by_chunk_id(vec2_per_query, top_k=expanded_top_k)

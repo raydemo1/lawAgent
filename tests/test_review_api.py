@@ -1,6 +1,7 @@
 """Tests for the FastAPI review API (Issue 10)."""
 
 from pathlib import Path
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -246,6 +247,8 @@ def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     # First trigger an eval run
     run_response = client.post("/api/eval/run")
     assert run_response.status_code == 200
+    assert run_response.json()["status"] in ("running", "succeeded")
+    _wait_for_eval_job(client)
 
     # Then get latest
     response = client.get("/api/eval/latest")
@@ -295,9 +298,12 @@ def test_eval_run_accepts_modes_and_top_k(
     response = client.post("/api/eval/run", json={"modes": ["service"], "top_k": 7})
 
     assert response.status_code == 200
+    _wait_for_eval_job(client)
     assert captured["modes"] == ["service"]
     assert captured["top_k"] == 7
-    assert "service" in response.json()["mode_metrics"]
+    latest = client.get("/api/eval/latest")
+    assert latest.status_code == 200
+    assert "service" in latest.json()["mode_metrics"]
 
 
 def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
@@ -317,6 +323,7 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     # Run eval on app1 — this caches the result in app1's state only.
     run_response = client1.post("/api/eval/run")
     assert run_response.status_code == 200
+    _wait_for_eval_job(client1)
 
     # app1 should now return the cached summary.
     latest1 = client1.get("/api/eval/latest")
@@ -326,6 +333,20 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     latest2 = client2.get("/api/eval/latest")
     assert latest2.status_code == 404
     assert "detail" in latest2.json()
+
+
+def _wait_for_eval_job(client: TestClient) -> dict:
+    deadline = time.monotonic() + 10
+    latest = {}
+    while time.monotonic() < deadline:
+        response = client.get("/api/eval/status")
+        assert response.status_code == 200
+        latest = response.json()
+        if latest["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.05)
+    assert latest["status"] == "succeeded", latest
+    return latest
 
 
 # ---------------------------------------------------------------------------
