@@ -10,6 +10,7 @@ from law_agent.review.evidence import (
     evaluate_after_second_retrieval,
     run_self_check,
     run_self_check_with_deepseek,
+    validate_llm_self_check,
 )
 from law_agent.review.facts import FactsExtractor, extract_facts, extract_facts_with_deepseek
 from law_agent.review.ids import make_id, utc_now_iso
@@ -345,11 +346,13 @@ def run_hybrid_retrieval(
     boosts_summary = compute_boosts_summary(facts, query_types)
 
     # Issue 7: Evidence self-check
-    self_check = (
-        run_self_check_with_deepseek(hybrid_hits, facts, chunks_by_id)
-        if review_mode == "llm"
-        else run_self_check(hybrid_hits, facts, chunks_by_id)
-    )
+    if review_mode == "llm":
+        self_check = run_self_check_with_deepseek(hybrid_hits, facts, chunks_by_id)
+        self_check = validate_llm_self_check(
+            self_check, hybrid_hits, facts, chunks_by_id
+        )
+    else:
+        self_check = run_self_check(hybrid_hits, facts, chunks_by_id)
     second_retrieval_info: dict[str, object] = {}
     final_evidence: list[RetrievalHit] = hybrid_hits
 
@@ -381,13 +384,12 @@ def run_hybrid_retrieval(
             hybrid2_hits[:5], chunks_by_id, max_neighbors=max_neighbors
         )
 
-        # Re-evaluate after second retrieval (never triggers another)
-        self_check = (
-            run_self_check_with_deepseek(hybrid2_hits, facts, chunks_by_id)
-            if review_mode == "llm"
-            else evaluate_after_second_retrieval(
-                hybrid2_hits, facts, chunks_by_id, self_check.issues
-            )
+        # Re-evaluate after second retrieval (never triggers another).
+        # Always use the rule-based evaluator to guarantee termination:
+        # critical_facts_missing are treated as soft warnings and the status
+        # is forced to sufficient or insufficient, never needs_second_retrieval.
+        self_check = evaluate_after_second_retrieval(
+            hybrid2_hits, facts, chunks_by_id, self_check.issues
         )
         self_check = self_check.model_copy(update={"second_retrieval_triggered": True})
 

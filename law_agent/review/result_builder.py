@@ -88,19 +88,27 @@ def _has_no_substantive_facts(facts: ReviewFacts) -> bool:
     When the material is extremely vague (e.g. "我们处理一些数据"), the
     system should abstain even if generic legal chunks are retrieved —
     there's no meaningful legal question to answer.
+
+    Note: LLM fact extraction may return the string "null" instead of
+    actual None for empty fields, so we filter those out too.
     """
 
+    _NULLISH = ("", "null", "None", "无", "未知")
+
+    def _is_truthy(val: str | None) -> bool:
+        return bool(val) and val not in _NULLISH
+
     has_cross_border = bool(facts.cross_border_transfer)
-    has_sensitive = bool(facts.sensitive_personal_info)
-    has_industry = bool(facts.industry)
-    has_region = bool(facts.region)
+    has_sensitive = _is_truthy(facts.sensitive_personal_info)
+    has_industry = _is_truthy(facts.industry)
+    has_region = _is_truthy(facts.region)
     # Filter out generic terms like "数据" that carry no legal specificity
     specific_data_types = [
         dt for dt in facts.data_types
-        if dt not in ("数据", "信息", "个人信息", "")
+        if dt not in ("数据", "信息", "个人信息", "") + _NULLISH
     ]
     has_specific_data = len(specific_data_types) > 0
-    has_processing_purpose = bool(facts.processing_purpose)
+    has_processing_purpose = _is_truthy(facts.processing_purpose)
 
     return not any([
         has_cross_border, has_sensitive, has_industry, has_region,
@@ -391,6 +399,10 @@ def build_result_generation_messages(
             "必须结合 question、material_excerpt、retrieval_queries 和 evidence_self_check 判断结论边界。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "risk_level 只能是 high、medium、low、insufficient_evidence。",
+            "当 evidence_self_check.status 为 sufficient 时，不应输出 insufficient_evidence，"
+            "除非材料完全没有实质性法律维度（如仅含「我们处理一些数据」等模糊描述）。",
+            "insufficient_evidence 仅适用于证据自检判定为 insufficient "
+            "或材料无实质法律维度的情形，不应因 missing_information 中的输入质量缺陷而弃答。",
             "不得编造未出现在证据中的法律来源。",
             "引用分组由程序处理，本节点不要输出 citations。",
             "不要输出解释、markdown 或自然语言。",
@@ -449,6 +461,23 @@ def build_review_result_with_deepseek(
             second_retrieval=second_retrieval,
         )
     )
+
+    # Guardrail: LLM may still abstain even when evidence is sufficient.
+    # If self-check is sufficient and facts have substantive legal dimensions,
+    # override false abstention to the rule-based risk level.
+    if (
+        self_check.status == "sufficient"
+        and not _has_no_substantive_facts(facts)
+        and draft.risk_level == "insufficient_evidence"
+    ):
+        has_legal_basis = any(
+            hit.citation_role == "primary_legal_basis" for hit in evidence_hits
+        )
+        rule_risk = determine_risk_level(facts, self_check, has_legal_basis)
+        draft = draft.model_copy(update={
+            "risk_level": rule_risk,
+            "conclusion": build_conclusion(facts, rule_risk, self_check),
+        })
 
     citation_groups, _violations = group_citations(evidence_hits, facts, chunks_by_id)
     all_citations: list[Citation] = []

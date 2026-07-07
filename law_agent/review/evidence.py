@@ -413,6 +413,74 @@ def run_self_check_with_deepseek(
     )
 
 
+def validate_llm_self_check(
+    llm_check: EvidenceSelfCheck,
+    hits: list[RetrievalHit],
+    facts: ReviewFacts,
+    chunks_by_id: dict[str, Chunk],
+) -> EvidenceSelfCheck:
+    """Validate LLM self-check output against deterministic rule checks.
+
+    The LLM may hallucinate evidence-composition issues — e.g. reporting
+    ``no_primary_legal_basis`` when primary-legal-basis hits are clearly
+    present, or ``only_auxiliary_evidence`` when non-auxiliary roles exist.
+    These are objective, verifiable facts about the evidence set, so rules
+    are authoritative.
+
+    After correction, if no evidence-quality issues remain (only
+    ``critical_facts_missing`` which is a soft input-quality warning),
+    status is set to ``sufficient`` per the project hard constraint.
+    """
+
+    if llm_check.status == "sufficient":
+        return llm_check
+
+    # Run rule checks for objective evidence-composition claims.
+    # These four issue types are verifiable facts about the evidence set,
+    # so rules are authoritative over LLM judgments.
+    rule_confirmed: set[str] = set()
+    if _check_primary_legal_basis(hits) is not None:
+        rule_confirmed.add("no_primary_legal_basis")
+    if _check_only_auxiliary_evidence(hits) is not None:
+        rule_confirmed.add("only_auxiliary_evidence")
+    if _check_region_match(hits, facts, chunks_by_id) is not None:
+        rule_confirmed.add("region_mismatch")
+    if _check_industry_match(hits, facts, chunks_by_id) is not None:
+        rule_confirmed.add("industry_mismatch")
+
+    # Remove LLM issues that rules contradict
+    objective_types = {
+        "no_primary_legal_basis",
+        "only_auxiliary_evidence",
+        "region_mismatch",
+        "industry_mismatch",
+    }
+    validated_issues: list[EvidenceIssue] = []
+    for issue in llm_check.issues:
+        if (
+            issue.issue_type in objective_types
+            and issue.issue_type not in rule_confirmed
+        ):
+            continue  # LLM hallucinated — rule says this issue does not exist
+        validated_issues.append(issue)
+
+    # Recompute status: evidence-quality issues vs soft warnings
+    evidence_quality_issues = [
+        i for i in validated_issues if i.issue_type != "critical_facts_missing"
+    ]
+
+    if not evidence_quality_issues:
+        return EvidenceSelfCheck(
+            status="sufficient",
+            issues=validated_issues,
+            triggered_reasons=[i.issue_type for i in validated_issues],
+            second_retrieval_triggered=False,
+        )
+
+    # Real evidence-quality issues remain — keep needs_second_retrieval
+    return llm_check.model_copy(update={"issues": validated_issues})
+
+
 # ---------------------------------------------------------------------------
 # Second retrieval plan
 # ---------------------------------------------------------------------------
@@ -490,7 +558,13 @@ def evaluate_after_second_retrieval(
     chunks_by_id: dict[str, Chunk],
     previous_issues: list[EvidenceIssue],
 ) -> EvidenceSelfCheck:
-    """Evaluate evidence after second retrieval. Never triggers another retrieval."""
+    """Evaluate evidence after second retrieval. Never triggers another retrieval.
+
+    After the second (final) retrieval attempt, the system should not abstain
+    if any citable legal basis is present — region/industry mismatches at this
+    point mean the corpus doesn't have a perfect match, not that evidence is
+    insufficient to provide a governed review.
+    """
 
     new_check = run_self_check(hits, facts, chunks_by_id)
 
@@ -512,7 +586,27 @@ def evaluate_after_second_retrieval(
             second_retrieval_triggered=True,
         )
 
-    # Still has issues — mark as insufficient, no more retrieval
+    # After second retrieval, if any citable legal basis exists (primary or
+    # conditional), treat as sufficient — remaining mismatches are corpus
+    # coverage limits, not evidence sufficiency failures.
+    has_citable_basis = any(
+        h.can_cite_clause
+        and h.citation_role in (
+            "primary_legal_basis",
+            "conditional_local_basis",
+            "conditional_industry_basis",
+        )
+        for h in hits
+    )
+    if has_citable_basis:
+        return EvidenceSelfCheck(
+            status="sufficient",
+            issues=new_check.issues,
+            triggered_reasons=new_check.triggered_reasons,
+            second_retrieval_triggered=True,
+        )
+
+    # No citable basis even after second retrieval — genuinely insufficient
     return EvidenceSelfCheck(
         status="insufficient",
         issues=new_check.issues,
