@@ -50,40 +50,6 @@ def _build_legal_issue_query(
     )
 
 
-def _build_topic_legal_queries(
-    question: str,
-    material_text: str | None,
-    ids: _QueryIdGenerator,
-) -> list[RetrievalQuery]:
-    text = f"{question} {material_text or ''}"
-    topics: list[str] = []
-    if "标准合同" in text:
-        topics.append("个人信息出境标准合同 办法 备案 指南 范本")
-    if "备案" in text:
-        topics.append("个人信息出境标准合同备案 指南 材料 流程")
-    if "负面清单" in text:
-        topics.append("自贸区 数据出境 负面清单 管理清单")
-    if "人脸" in text or "敏感个人信息" in text:
-        topics.append("敏感个人信息 人脸信息 个人信息保护法 处理规则")
-    if "汽车" in text or "智能网联" in text:
-        topics.append("汽车数据 智能网联汽车 数据出境 安全管理")
-
-    queries: list[RetrievalQuery] = []
-    seen: set[str] = set()
-    for topic in topics:
-        if topic in seen:
-            continue
-        seen.add(topic)
-        queries.append(
-            RetrievalQuery(
-                query_id=ids.next_id(),
-                query_type="legal_issue",
-                text=topic,
-            )
-        )
-    return queries
-
-
 def _build_material_fact_query(
     facts: ReviewFacts, ids: _QueryIdGenerator
 ) -> RetrievalQuery | None:
@@ -171,7 +137,6 @@ def plan_queries(
 
     legal_query = _build_legal_issue_query(question, ids)
     queries.append(legal_query)
-    queries.extend(_build_topic_legal_queries(question, material_text, ids))
 
     material_query = _build_material_fact_query(facts, ids)
     if material_query is not None:

@@ -272,21 +272,6 @@ def run_self_check(
         i for i in issues if i.issue_type != "critical_facts_missing"
     ]
 
-    # Region-specific and cross-border industry cases benefit from one
-    # controlled supplemental retrieval even when the remaining issue is
-    # missing user facts: the product should show that it checked the
-    # conditional local/industry basis before concluding.
-    if not evidence_issues and has_critical_missing:
-        if facts.region or (facts.industry and facts.cross_border_transfer):
-            plan = build_second_retrieval_plan(issues, facts, triggered_reasons)
-            return EvidenceSelfCheck(
-                status="needs_second_retrieval",
-                issues=issues,
-                triggered_reasons=triggered_reasons,
-                second_retrieval_triggered=False,
-                second_retrieval_plan=plan,
-            )
-
     # If the ONLY issue is critical_facts_missing (evidence is actually good),
     # do NOT abstain — mark as sufficient with a warning. Missing facts is an
     # input quality issue, not an evidence sufficiency issue.

@@ -81,10 +81,6 @@ _DATA_TYPE_TERMS: dict[str, str] = {
     "银行卡": "银行账户",
     "银行账户": "银行账户",
     "交易记录": "交易记录",
-    "员工数据": "员工个人信息",
-    "客户信息": "客户个人信息",
-    "用户数据": "用户个人信息",
-    "个人信息": "个人信息",
     "通讯录": "通讯录",
     "照片": "照片",
     "指纹": "指纹",
@@ -277,7 +273,7 @@ def extract_facts(material_text: str, question: str | None = None) -> ReviewFact
 
     data_types = _detect_data_types(text)
     overseas_recipient = _detect_overseas_recipient(text)
-    cross_border = any(term in text for term in _CROSS_BORDER_TERMS) or bool(overseas_recipient)
+    cross_border = any(term in text for term in _CROSS_BORDER_TERMS)
     sensitive = any(hint in text for hint in _SENSITIVE_HINTS)
     industry = _detect_industry(text)
     region = _detect_region(text)
