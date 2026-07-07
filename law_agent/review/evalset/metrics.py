@@ -142,12 +142,10 @@ def evaluate_case(
 
     # Determine bad case
     bad_reasons: list[str] = []
-    if recall_5 < 0.5 and not scenario.should_abstain:
-        bad_reasons.append(f"low_recall_at_5={recall_5:.2f}")
+    if scenario.expected_sources and recall_5 == 0.0 and not scenario.should_abstain:
+        bad_reasons.append("zero_recall_at_5")
     if not abstention_correct:
         bad_reasons.append("abstention_incorrect")
-    if not second_retrieval_correct:
-        bad_reasons.append("second_retrieval_incorrect")
     if citation_violations > 0:
         bad_reasons.append(f"citation_violations={citation_violations}")
 

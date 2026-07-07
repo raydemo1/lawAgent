@@ -32,7 +32,7 @@ RetrievalEvalMode = Literal["service", "local"]
 ReviewEvalMode = Literal["llm", "local"]
 DEFAULT_RETRIEVAL_MODE: RetrievalEvalMode = "service"
 DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
-DEFAULT_MAX_WORKERS = 4
+DEFAULT_MAX_WORKERS = 1
 
 
 def run_evaluation(

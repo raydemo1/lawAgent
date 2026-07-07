@@ -27,6 +27,7 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
         expected_sources=[
             "cac_data_export_security_assessment_measures_2022",
             "cac_data_export_assessment_qna_2022",
+            "cac_cross_border_data_flow_rules_2024",
             "missing_20260702_009",
         ],
         expected_citation_roles=["primary_legal_basis"],
@@ -61,6 +62,7 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
         expected_sources=[
             "cac_data_export_security_assessment_measures_2022",
             "cac_cross_border_data_flow_rules_2024",
+            "cac_data_export_assessment_qna_2022",
         ],
         expected_citation_roles=["primary_legal_basis"],
         should_trigger_second_retrieval=False,
@@ -157,6 +159,7 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
         expected_sources=[
             "missing_20260702_013",
             "missing_20260702_006",
+            "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis"],
         should_trigger_second_retrieval=True,
@@ -172,6 +175,7 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
         ),
         expected_sources=[
             "missing_20260702_005",
+            "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis"],
         should_trigger_second_retrieval=True,
@@ -186,6 +190,7 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
         ),
         expected_sources=[
             "missing_20260702_007",
+            "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis"],
         should_trigger_second_retrieval=True,
