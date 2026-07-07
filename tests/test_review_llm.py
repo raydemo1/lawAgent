@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from law_agent.llm.openai_compatible import ChatMessage
+from law_agent.llm.openai_compatible import ChatMessage, _loads_tool_arguments
 from law_agent.review.facts import (
     build_fact_extraction_messages,
     extract_facts_with_deepseek,
@@ -120,6 +120,19 @@ def test_structured_node_retries_validation_failure() -> None:
     assert client.kwargs[0]["output_model"] is ReviewFacts
     assert client.kwargs[0]["tool_name"] == "fact_extraction"
     assert "validation_errors=" in client.calls[1][-1].content
+
+
+def test_strict_tool_argument_loader_repairs_bare_string_tokens() -> None:
+    payload = (
+        '{"region": CN, "cross_border_transfer": true, '
+        '"industry": null, "missing_information": []}'
+    )
+
+    parsed = _loads_tool_arguments(payload)
+
+    assert parsed["region"] == "CN"
+    assert parsed["cross_border_transfer"] is True
+    assert parsed["industry"] is None
 
 
 def test_structured_node_uses_per_node_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
