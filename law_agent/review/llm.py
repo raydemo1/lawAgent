@@ -43,7 +43,7 @@ class ReviewWorkflowFailed(RuntimeError):
         }
 
 
-def max_retries_for_node(node_name: str, default: int = 2) -> int:
+def max_retries_for_node(node_name: str, default: int = 3) -> int:
     """Return configured retry count for a workflow node."""
 
     env_by_node = {
@@ -60,6 +60,18 @@ def max_retries_for_node(node_name: str, default: int = 2) -> int:
     except ValueError:
         return default
     return max(retries, 0)
+
+
+def model_for_node(node_name: str) -> str | None:
+    """Return optional per-node model override."""
+
+    env_by_node = {
+        "fact_extraction": "LAWAGENT_LLM_FACT_MODEL",
+        "query_planning": "LAWAGENT_LLM_QUERY_MODEL",
+        "evidence_check": "LAWAGENT_LLM_EVIDENCE_MODEL",
+        "result_generation": "LAWAGENT_LLM_RESULT_MODEL",
+    }
+    return os.getenv(env_by_node.get(node_name, ""))
 
 
 class StructuredLLMNode(Generic[ModelT]):
@@ -80,6 +92,7 @@ class StructuredLLMNode(Generic[ModelT]):
         self.max_retries = (
             max_retries if max_retries is not None else max_retries_for_node(node_name)
         )
+        self.model = model_for_node(node_name)
         self.trace_id = trace_id
 
     def run(self, messages: Sequence[ChatMessage]) -> ModelT:
@@ -93,6 +106,7 @@ class StructuredLLMNode(Generic[ModelT]):
                     list(messages),
                     output_model=self.output_model,
                     tool_name=self.node_name,
+                    model=self.model,
                 )
                 return self.output_model.model_validate(raw, strict=True)
             except ValidationError as exc:
@@ -121,7 +135,18 @@ class StructuredLLMNode(Generic[ModelT]):
                     ) from exc
             except Exception as exc:
                 last_reason = "llm_api_error"
-                last_message = f"{self.node_name} LLM call failed"
+                last_message = f"{self.node_name} LLM call failed: {exc}"
+                messages = [
+                    *messages,
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "上一轮 LLM 调用或 JSON 解析失败。"
+                            "请只重新输出符合 schema 的 JSON/tool arguments，不要解释。"
+                            f" error={exc}"
+                        ),
+                    ),
+                ]
                 if attempt == attempts_allowed:
                     raise ReviewWorkflowFailed(
                         failed_node=self.node_name,

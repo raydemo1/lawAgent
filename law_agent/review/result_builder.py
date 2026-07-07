@@ -31,6 +31,7 @@ from law_agent.review.schemas import (
     ReviewFacts,
     ReviewResult,
     RetrievalHit,
+    RetrievalQuery,
     RiskLevel,
 )
 
@@ -347,6 +348,10 @@ def build_result_generation_messages(
     facts: ReviewFacts,
     self_check: EvidenceSelfCheck,
     evidence_hits: list[RetrievalHit],
+    question: str | None = None,
+    material_text: str | None = None,
+    retrieval_queries: list[RetrievalQuery] | None = None,
+    second_retrieval: dict[str, object] | None = None,
 ) -> list[ChatMessage]:
     """Build a DeepSeek JSON prompt for structured review result generation."""
 
@@ -371,12 +376,19 @@ def build_result_generation_messages(
         for hit in evidence_hits[:12]
     ]
     payload = {
+        "question": question,
+        "material_excerpt": (material_text or "")[:3000],
         "review_facts": facts.model_dump(),
         "evidence_self_check": self_check.model_dump(),
+        "retrieval_queries": [
+            query.model_dump() for query in (retrieval_queries or [])
+        ],
+        "second_retrieval": second_retrieval or {},
         "evidence": evidence,
         "json_example": json_example,
         "instructions": [
             "基于审查事实和证据生成结构化审查结果。",
+            "必须结合 question、material_excerpt、retrieval_queries 和 evidence_self_check 判断结论边界。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "risk_level 只能是 high、medium、low、insufficient_evidence。",
             "不得编造未出现在证据中的法律来源。",
@@ -405,6 +417,10 @@ def build_review_result_with_deepseek(
     self_check: EvidenceSelfCheck,
     evidence_hits: list[RetrievalHit],
     chunks_by_id: dict[str, Chunk] | None = None,
+    question: str | None = None,
+    material_text: str | None = None,
+    retrieval_queries: list[RetrievalQuery] | None = None,
+    second_retrieval: dict[str, object] | None = None,
     client: OpenAICompatibleClient | None = None,
     max_retries: int | None = None,
 ) -> ReviewResult:
@@ -427,6 +443,10 @@ def build_review_result_with_deepseek(
             facts=facts,
             self_check=self_check,
             evidence_hits=evidence_hits,
+            question=question,
+            material_text=material_text,
+            retrieval_queries=retrieval_queries,
+            second_retrieval=second_retrieval,
         )
     )
 

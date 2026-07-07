@@ -6,6 +6,7 @@ and produces a comparison summary.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -31,6 +32,7 @@ RetrievalEvalMode = Literal["service", "local"]
 ReviewEvalMode = Literal["llm", "local"]
 DEFAULT_RETRIEVAL_MODE: RetrievalEvalMode = "service"
 DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
+DEFAULT_MAX_WORKERS = 4
 
 
 def run_evaluation(
@@ -40,6 +42,7 @@ def run_evaluation(
     top_k: int = 10,
     retrieval_mode: RetrievalEvalMode = DEFAULT_RETRIEVAL_MODE,
     review_mode: ReviewEvalMode = DEFAULT_REVIEW_MODE,
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> EvalSummary:
     """Run full evaluation across selected modes.
 
@@ -52,30 +55,38 @@ def run_evaluation(
     generated_at = utc_now_iso()
 
     eval_key = _eval_key(retrieval_mode, review_mode)
+    max_workers = max(1, max_workers)
 
-    # Service retrieval needs ES + pgvector adapters; build once and reuse across
-    # all scenarios to avoid opening/closing connections per case.
+    # Serial service retrieval can reuse adapters. Parallel service retrieval
+    # must not share the pgvector Postgres connection across threads, so each
+    # case builds its own adapters from the same config.
     service_adapters = None
+    service_config = None
     if retrieval_mode == "service":
         from law_agent.config import require_service_config
         from law_agent.review.retrieval.service_backends import build_service_adapters
 
-        service_adapters = build_service_adapters(require_service_config())
-        if review_mode == "local":
+        service_config = require_service_config()
+        if max_workers == 1:
+            service_adapters = build_service_adapters(service_config)
+        if review_mode == "local" and service_adapters is not None:
             _prewarm_service_eval_queries(service_adapters, scenarios)
 
     try:
         results_by_mode: dict[str, list[CaseMetricResult]] = {}
-        mode_results: list[CaseMetricResult] = []
-        for scenario in scenarios:
-            mode_results.append(
-                _run_single_case(
-                    scenario,
-                    chunks_path,
-                    retrieval_mode=retrieval_mode,
-                    review_mode=review_mode,
-                    top_k=top_k,
-                    service_adapters=service_adapters,
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            mode_results = list(
+                executor.map(
+                    lambda scenario: _run_single_case(
+                        scenario,
+                        chunks_path,
+                        retrieval_mode=retrieval_mode,
+                        review_mode=review_mode,
+                        top_k=top_k,
+                        service_adapters=service_adapters,
+                        service_config=service_config,
+                    ),
+                    scenarios,
                 )
             )
         results_by_mode[eval_key] = mode_results
@@ -131,6 +142,7 @@ def _run_single_case(
     review_mode: ReviewEvalMode,
     top_k: int,
     service_adapters: object | None = None,
+    service_config: object | None = None,
 ) -> CaseMetricResult:
     """Run a single scenario in one mode and return metrics."""
 
@@ -159,6 +171,7 @@ def _run_single_case(
                 output_dir=tmp_path,
                 top_k=top_k,
                 review_mode=service_review_mode,
+                config=service_config,
                 adapters=service_adapters,
             )
             hits = trace.final_evidence or trace.hybrid_results

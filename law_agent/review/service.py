@@ -438,20 +438,30 @@ def run_hybrid_retrieval(
     write_retrieval_traces(retrieval_traces_path(output_dir), updated_traces)
 
     # Issue 8: Build governed review result
-    result_builder = (
-        build_review_result_with_deepseek
-        if review_mode == "llm"
-        else build_review_result
-    )
-    review_result = result_builder(
-        review_result_id=case.latest_result_id or make_id("result"),
-        review_case_id=case_id,
-        trace_id=target_trace.trace_id,
-        facts=facts,
-        self_check=self_check,
-        evidence_hits=final_evidence,
-        chunks_by_id=chunks_by_id,
-    )
+    if review_mode == "llm":
+        review_result = build_review_result_with_deepseek(
+            review_result_id=case.latest_result_id or make_id("result"),
+            review_case_id=case_id,
+            trace_id=target_trace.trace_id,
+            facts=facts,
+            self_check=self_check,
+            evidence_hits=final_evidence,
+            chunks_by_id=chunks_by_id,
+            question=case.question,
+            material_text=case.material.material_text,
+            retrieval_queries=updated_trace.queries,
+            second_retrieval=updated_trace.second_retrieval,
+        )
+    else:
+        review_result = build_review_result(
+            review_result_id=case.latest_result_id or make_id("result"),
+            review_case_id=case_id,
+            trace_id=target_trace.trace_id,
+            facts=facts,
+            self_check=self_check,
+            evidence_hits=final_evidence,
+            chunks_by_id=chunks_by_id,
+        )
 
     # Persist updated result
     from law_agent.review.io import read_review_results

@@ -300,7 +300,12 @@ export async function submitReview(
  * @throws {ApiError} On 400 (bad config) or 500 (server error).
  */
 export async function runEvaluation(
-  options: EvalRunOptions = { retrieval_mode: 'service', review_mode: 'llm', top_k: 10 },
+  options: EvalRunOptions = {
+    retrieval_mode: 'service',
+    review_mode: 'llm',
+    top_k: 10,
+    max_workers: 4,
+  },
 ): Promise<EvalJobResponse> {
   return request<EvalJobResponse>('/api/eval/run', {
     method: 'POST',

@@ -275,12 +275,14 @@ def test_eval_run_accepts_retrieval_and_review_modes(
         retrieval_mode="service",
         review_mode="llm",
         top_k=10,
+        max_workers=4,
         **kwargs,
     ):
         captured["chunks_path"] = chunks_path
         captured["retrieval_mode"] = retrieval_mode
         captured["review_mode"] = review_mode
         captured["top_k"] = top_k
+        captured["max_workers"] = max_workers
         from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
 
         metrics = ModeMetrics(
@@ -307,7 +309,12 @@ def test_eval_run_accepts_retrieval_and_review_modes(
 
     response = client.post(
         "/api/eval/run",
-        json={"retrieval_mode": "service", "review_mode": "llm", "top_k": 7},
+        json={
+            "retrieval_mode": "service",
+            "review_mode": "llm",
+            "top_k": 7,
+            "max_workers": 3,
+        },
     )
 
     assert response.status_code == 200
@@ -315,6 +322,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
     assert captured["retrieval_mode"] == "service"
     assert captured["review_mode"] == "llm"
     assert captured["top_k"] == 7
+    assert captured["max_workers"] == 3
     latest = client.get("/api/eval/latest")
     assert latest.status_code == 200
     assert "retrieval=service,review=llm" in latest.json()["mode_metrics"]

@@ -65,7 +65,7 @@ def load_llm_config() -> LLMConfig:
             "OPENAI_COMPATIBLE_BETA_BASE_URL", f"{base_url}/beta"
         ).rstrip("/"),
         api_key=os.getenv("OPENAI_COMPATIBLE_API_KEY") or None,
-        model=os.getenv("OPENAI_COMPATIBLE_MODEL", "deepseek-v4-pro"),
+        model=os.getenv("OPENAI_COMPATIBLE_MODEL", "deepseek-v4-flash"),
         timeout_seconds=int(timeout),
         structured_output_mode=structured_output_mode,  # type: ignore[arg-type]
         reasoning_effort=reasoning_effort,  # type: ignore[arg-type]

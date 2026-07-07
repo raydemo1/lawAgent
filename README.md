@@ -26,10 +26,15 @@ Copy-Item .env.example .env
 ```text
 OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
 OPENAI_COMPATIBLE_API_KEY=sk-your-deepseek-api-key
-OPENAI_COMPATIBLE_MODEL=deepseek-v4-pro
+OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash
 OPENAI_COMPATIBLE_BETA_BASE_URL=https://api.deepseek.com/beta
 OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=strict_tool
 OPENAI_COMPATIBLE_REASONING_EFFORT=none
+LAWAGENT_LLM_MAX_RETRIES=3
+LAWAGENT_LLM_FACT_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_QUERY_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_EVIDENCE_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_RESULT_MODEL=deepseek-v4-flash
 ```
 
 配置后验证：
@@ -95,10 +100,15 @@ Copy-Item .env.example .env
 # LLM（DeepSeek 或其他 OpenAI 兼容服务）
 OPENAI_COMPATIBLE_BASE_URL=https://api.deepseek.com
 OPENAI_COMPATIBLE_API_KEY=sk-your-deepseek-api-key
-OPENAI_COMPATIBLE_MODEL=deepseek-v4-pro
+OPENAI_COMPATIBLE_MODEL=deepseek-v4-flash
 OPENAI_COMPATIBLE_BETA_BASE_URL=https://api.deepseek.com/beta
 OPENAI_COMPATIBLE_STRUCTURED_OUTPUT=strict_tool
 OPENAI_COMPATIBLE_REASONING_EFFORT=none
+LAWAGENT_LLM_MAX_RETRIES=3
+LAWAGENT_LLM_FACT_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_QUERY_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_EVIDENCE_MODEL=deepseek-v4-flash
+LAWAGENT_LLM_RESULT_MODEL=deepseek-v4-flash
 
 # Embedding（硅基流动 SiliconCloud，OpenAI 兼容）
 EMBEDDING_PROVIDER=openai_compatible

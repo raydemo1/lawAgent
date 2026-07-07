@@ -90,6 +90,12 @@ class EvalRunRequest(BaseModel):
         description="Review owner under test: llm or local",
     )
     top_k: int = Field(default=10, ge=1, le=100, description="Retrieval top_k")
+    max_workers: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Number of eval cases to run in parallel",
+    )
 
 
 class EvalJobResponse(BaseModel):
@@ -328,6 +334,7 @@ def create_app(
         retrieval_mode = request.retrieval_mode if request else "service"
         review_mode = request.review_mode if request else "llm"
         top_k = request.top_k if request else 10
+        max_workers = request.max_workers if request else 4
 
         with app.state.eval_lock:
             if app.state.eval_job["status"] == "running":
@@ -344,7 +351,7 @@ def create_app(
 
         thread = threading.Thread(
             target=_run_eval_job,
-            args=(app, job_id, chunks, retrieval_mode, review_mode, top_k),
+            args=(app, job_id, chunks, retrieval_mode, review_mode, top_k, max_workers),
             daemon=True,
         )
         thread.start()
@@ -373,6 +380,7 @@ def _run_eval_job(
     retrieval_mode: RetrievalEvalMode,
     review_mode: ReviewEvalMode,
     top_k: int,
+    max_workers: int,
 ) -> None:
     try:
         summary = run_evaluation(
@@ -380,6 +388,7 @@ def _run_eval_job(
             retrieval_mode=retrieval_mode,
             review_mode=review_mode,
             top_k=top_k,
+            max_workers=max_workers,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced through job status
         with app.state.eval_lock:

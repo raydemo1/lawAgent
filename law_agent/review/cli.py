@@ -172,6 +172,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             retrieval_mode=args.retrieval_mode,
             review_mode=args.review_mode,
+            max_workers=args.max_workers,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -347,6 +348,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to chunks.jsonl corpus file",
     )
     eval_parser.add_argument("--top-k", type=int, default=10)
+    eval_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Number of eval cases to run in parallel. Defaults to 4.",
+    )
     eval_parser.add_argument(
         "--retrieval-mode",
         choices=["service", "local"],

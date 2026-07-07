@@ -176,6 +176,7 @@ export default function EvalPage(): JSX.Element {
         retrieval_mode: retrievalMode,
         review_mode: reviewMode,
         top_k: 10,
+        max_workers: 4,
       })
       setJob(next)
       if (next.status === 'failed') {

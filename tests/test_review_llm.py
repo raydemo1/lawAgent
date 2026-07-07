@@ -13,7 +13,7 @@ from law_agent.review.evidence import (
     build_evidence_check_messages,
     run_self_check_with_deepseek,
 )
-from law_agent.review.llm import ReviewWorkflowFailed, StructuredLLMNode
+from law_agent.review.llm import ReviewWorkflowFailed, StructuredLLMNode, model_for_node
 from law_agent.review.query_planner import (
     build_query_planning_messages,
     plan_queries_with_deepseek,
@@ -90,12 +90,17 @@ def test_result_prompt_contains_json_example() -> None:
         facts=ReviewFacts(cross_border_transfer=True),
         self_check=EvidenceSelfCheck(status="sufficient"),
         evidence_hits=[_hit()],
+        question="是否需要数据出境安全评估？",
+        material_text="手机号发送给新加坡服务商。",
     )
     combined = "\n".join(message.content for message in messages)
 
     assert "json" in combined.lower()
     assert "json_example" in combined
     assert '"risk_level"' in combined
+    assert '"question"' in combined
+    assert '"material_excerpt"' in combined
+    assert "retrieval_queries" in combined
 
 
 def test_structured_node_retries_validation_failure() -> None:
@@ -115,6 +120,22 @@ def test_structured_node_retries_validation_failure() -> None:
     assert client.kwargs[0]["output_model"] is ReviewFacts
     assert client.kwargs[0]["tool_name"] == "fact_extraction"
     assert "validation_errors=" in client.calls[1][-1].content
+
+
+def test_structured_node_uses_per_node_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LAWAGENT_LLM_FACT_MODEL", "deepseek-v4-flash")
+    client = FakeClient(outputs=[_valid_facts_payload()])
+    node = StructuredLLMNode(
+        node_name="fact_extraction",
+        output_model=ReviewFacts,
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    node.run([ChatMessage(role="user", content="json")])
+
+    assert model_for_node("fact_extraction") == "deepseek-v4-flash"
+    assert client.kwargs[0]["model"] == "deepseek-v4-flash"
 
 
 def test_structured_node_exhaustion_returns_review_failed() -> None:
@@ -269,3 +290,35 @@ def test_result_generation_with_deepseek_uses_program_citation_groups() -> None:
     assert result.conclusion.startswith("该场景涉及数据出境")
     assert result.applicable_evidence
     assert result.citations[0].chunk_id == "c1"
+
+
+def test_result_generation_prompt_receives_trace_context() -> None:
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "medium",
+                "conclusion": "需要结合材料和证据补充确认。",
+                "trigger_reasons": ["cross_border_transfer"],
+                "missing_information": [],
+                "recommended_actions": ["补充确认"],
+                "risk_boundaries": ["基于当前材料。"],
+            }
+        ]
+    )
+
+    build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(cross_border_transfer=True),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[_hit()],
+        question="是否需要数据出境安全评估？",
+        material_text="手机号发送给新加坡服务商。",
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    prompt = client.calls[0][-1].content
+    assert "是否需要数据出境安全评估" in prompt
+    assert "手机号发送给新加坡服务商" in prompt

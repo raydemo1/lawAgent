@@ -320,6 +320,7 @@ export interface EvalRunOptions {
   retrieval_mode?: EvalRetrievalMode;
   review_mode?: EvalReviewMode;
   top_k?: number;
+  max_workers?: number;
 }
 
 export type EvalJobStatus = 'idle' | 'running' | 'succeeded' | 'failed';
