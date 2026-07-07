@@ -10,9 +10,23 @@ component scores preserved for traceability.
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Mapping
+
+from law_agent.data.schemas import Chunk
+from law_agent.review.retrieval.keyword import tokenize
 from law_agent.review.schemas import RetrievalHit
 
 DEFAULT_RRF_K = 60
+DEFAULT_SOURCE_SUPPORT_DECAY = 0.35
+DEFAULT_CONTEXT_SUPPORT_DECAY = 0.45
+DEFAULT_NEAR_DUPLICATE_SIMILARITY = 0.82
+SOURCE_QUERY_TYPE_WEIGHTS = {
+    "industry_condition": 1.2,
+    "region_condition": 1.2,
+    "material_fact": 1.1,
+    "missing_information": 0.7,
+}
 
 
 def rrf_fuse(
@@ -96,3 +110,119 @@ def rrf_fuse(
             )
         )
     return fused
+
+
+def source_aware_fuse(
+    hits: list[RetrievalHit],
+    *,
+    top_k: int = 10,
+    chunks_by_id: Mapping[str, Chunk] | None = None,
+    support_decay: float = DEFAULT_SOURCE_SUPPORT_DECAY,
+    context_support_decay: float = DEFAULT_CONTEXT_SUPPORT_DECAY,
+    near_duplicate_similarity: float = DEFAULT_NEAR_DUPLICATE_SIMILARITY,
+) -> list[RetrievalHit]:
+    """Collapse chunk-ranked candidates into source-diverse evidence.
+
+    RRF is intentionally chunk-level: it rewards chunks that appear in both
+    retrieval routes. Legal evidence, however, is often judged at source level
+    in evaluation and in the user's mental model. This pass ranks sources by
+    their strongest chunk plus a small amount of supporting evidence from
+    nearby or semantically distinct chunks in the same source, then returns one
+    representative chunk per source.
+
+    The support rules are deliberately conservative:
+    - adjacent/same-article chunks provide contextual support;
+    - near-duplicate chunks above the similarity threshold do not over-boost;
+    - unrelated chunks can still add a small signal that the whole source is
+      broadly relevant.
+    """
+
+    if top_k <= 0 or not hits:
+        return []
+
+    groups: dict[str, list[RetrievalHit]] = defaultdict(list)
+    for hit in hits:
+        groups[hit.source_id].append(hit)
+
+    scored_sources: list[tuple[float, str, RetrievalHit]] = []
+    for source_id, source_hits in groups.items():
+        ordered = sorted(source_hits, key=lambda h: (-h.score, h.rank, h.chunk_id))
+        representative = ordered[0]
+        source_score = representative.score
+        support_count = 0
+
+        for support_hit in ordered[1:]:
+            similarity = _text_similarity(representative.text, support_hit.text)
+            if similarity >= near_duplicate_similarity:
+                continue
+
+            decay = (
+                context_support_decay
+                if _is_context_related(representative, support_hit, chunks_by_id)
+                else support_decay
+            )
+            source_score += support_hit.score * decay
+            support_count += 1
+            if support_count >= 2:
+                break
+
+        source_score *= SOURCE_QUERY_TYPE_WEIGHTS.get(
+            representative.matched_query_type or "", 1.0
+        )
+        scored_sources.append((source_score, source_id, representative))
+
+    scored_sources.sort(key=lambda item: (-item[0], item[1]))
+
+    fused: list[RetrievalHit] = []
+    for rank, (score, _source_id, hit) in enumerate(scored_sources[:top_k]):
+        fused.append(
+            hit.model_copy(
+                update={
+                    "score": round(score, 6),
+                    "rank": rank,
+                    "retriever": "hybrid",
+                }
+            )
+        )
+    return fused
+
+
+def _is_context_related(
+    first: RetrievalHit,
+    second: RetrievalHit,
+    chunks_by_id: Mapping[str, Chunk] | None,
+) -> bool:
+    if first.source_id != second.source_id:
+        return False
+    if chunks_by_id is None:
+        return False
+
+    first_chunk = chunks_by_id.get(first.chunk_id)
+    second_chunk = chunks_by_id.get(second.chunk_id)
+    if first_chunk is None or second_chunk is None:
+        return False
+
+    if first_chunk.article_no and first_chunk.article_no == second_chunk.article_no:
+        return True
+    if first_chunk.next_chunk_id == second.chunk_id:
+        return True
+    if first_chunk.prev_chunk_id == second.chunk_id:
+        return True
+    if second_chunk.next_chunk_id == first.chunk_id:
+        return True
+    if second_chunk.prev_chunk_id == first.chunk_id:
+        return True
+
+    return abs(first_chunk.chunk_index - second_chunk.chunk_index) <= 1
+
+
+def _text_similarity(first: str, second: str) -> float:
+    first_tokens = set(tokenize(first))
+    second_tokens = set(tokenize(second))
+    if not first_tokens or not second_tokens:
+        return 0.0
+    intersection = len(first_tokens & second_tokens)
+    union = len(first_tokens | second_tokens)
+    if union == 0:
+        return 0.0
+    return intersection / union

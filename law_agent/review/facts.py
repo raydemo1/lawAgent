@@ -55,6 +55,11 @@ _OVERSEAS_RECIPIENTS: dict[str, str] = {
 }
 
 _DATA_TYPE_TERMS: dict[str, str] = {
+    "个人信息": "个人信息",
+    "客户信息": "客户个人信息",
+    "客户数据": "客户个人信息",
+    "员工信息": "员工个人信息",
+    "员工数据": "员工个人信息",
     "手机号": "手机号",
     "电话号码": "手机号",
     "手机号码": "手机号",
@@ -158,6 +163,10 @@ _THRESHOLD_TERMS: tuple[str, ...] = (
     "人数", "规模",
 )
 
+_TRANSFER_VERBS: tuple[str, ...] = (
+    "传输", "发送", "提供", "共享", "传送", "转移", "访问",
+)
+
 
 # ---------------------------------------------------------------------------
 # Deterministic rules extractor
@@ -176,6 +185,21 @@ def _detect_overseas_recipient(text: str) -> str | None:
         if term in text:
             return label
     return None
+
+
+def _detect_cross_border_transfer(text: str, overseas_recipient: str | None) -> bool:
+    if any(term in text for term in _CROSS_BORDER_TERMS):
+        return True
+    if not overseas_recipient:
+        return False
+
+    recipient_index = text.find(overseas_recipient)
+    if recipient_index == -1:
+        return False
+    window_start = max(0, recipient_index - 12)
+    window_end = min(len(text), recipient_index + len(overseas_recipient) + 18)
+    context = text[window_start:window_end]
+    return any(verb in context for verb in _TRANSFER_VERBS)
 
 
 def _detect_industry(text: str) -> str | None:
@@ -273,7 +297,7 @@ def extract_facts(material_text: str, question: str | None = None) -> ReviewFact
 
     data_types = _detect_data_types(text)
     overseas_recipient = _detect_overseas_recipient(text)
-    cross_border = any(term in text for term in _CROSS_BORDER_TERMS)
+    cross_border = _detect_cross_border_transfer(text, overseas_recipient)
     sensitive = any(hint in text for hint in _SENSITIVE_HINTS)
     industry = _detect_industry(text)
     region = _detect_region(text)

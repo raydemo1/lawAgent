@@ -44,6 +44,9 @@ class CaseMetricResult(StrictModel):
     recall_at_3: float
     recall_at_5: float
     mrr_at_10: float
+    candidate_recall_at_50: float = 0.0
+    distinct_source_recall_at_5: float = 0.0
+    duplicate_source_count_at_10: int = 0
     citation_violation_count: int
     abstention_correct: bool
     second_retrieval_correct: bool
@@ -65,6 +68,9 @@ class ModeMetrics(StrictModel):
     mean_recall_at_3: float
     mean_recall_at_5: float
     mean_mrr_at_10: float
+    mean_candidate_recall_at_50: float = 0.0
+    mean_distinct_source_recall_at_5: float = 0.0
+    mean_duplicate_source_count_at_10: float = 0.0
     abstention_accuracy: float
     second_retrieval_accuracy: float
     total_citation_violations: int

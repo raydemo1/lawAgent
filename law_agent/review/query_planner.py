@@ -24,6 +24,32 @@ from law_agent.review.schemas import ReviewFacts, RetrievalQuery, RetrievalQuery
 
 QueryPlanner = Callable[[str, ReviewFacts, str | None], list[RetrievalQuery]]
 
+_REGION_INTENT_TERMS: tuple[str, ...] = (
+    "自贸区",
+    "自由贸易试验区",
+    "负面清单",
+    "管理清单",
+    "地方政策",
+    "区域政策",
+    "数据出境",
+    "跨境",
+    "出境",
+)
+
+_INDUSTRY_INTENT_TERMS: tuple[str, ...] = (
+    "行业",
+    "安全要求",
+    "安全管理",
+    "合规要求",
+    "特殊要求",
+    "数据处理者",
+    "数据处理",
+    "数据安全",
+    "数据出境",
+    "测绘",
+    "地理信息",
+)
+
 
 class _QueryIdGenerator:
     """Deterministic counter-based query ID generator."""
@@ -71,11 +97,13 @@ def _build_material_fact_query(
 
 
 def _build_region_query(
-    facts: ReviewFacts, ids: _QueryIdGenerator
+    facts: ReviewFacts,
+    ids: _QueryIdGenerator,
+    context_text: str,
 ) -> RetrievalQuery | None:
-    # Only generate region-specific queries for cross-border scenarios —
-    # region alone (e.g. CN) has no retrieval value for non-cross-border cases.
-    if not facts.region or not facts.cross_border_transfer:
+    if not facts.region:
+        return None
+    if not _contains_any(context_text, _REGION_INTENT_TERMS):
         return None
     return RetrievalQuery(
         query_id=ids.next_id(),
@@ -85,16 +113,43 @@ def _build_region_query(
 
 
 def _build_industry_query(
-    facts: ReviewFacts, ids: _QueryIdGenerator
+    facts: ReviewFacts,
+    ids: _QueryIdGenerator,
+    context_text: str,
 ) -> RetrievalQuery | None:
-    # Only generate industry-specific queries for cross-border scenarios.
-    if not facts.industry or not facts.cross_border_transfer:
+    if not facts.industry:
         return None
+    if not _contains_any(context_text, _INDUSTRY_INTENT_TERMS):
+        return None
+    focus = "数据出境" if facts.cross_border_transfer else "数据安全"
     return RetrievalQuery(
         query_id=ids.next_id(),
         query_type="industry_condition",
-        text=f"{facts.industry} 数据出境 安全管理 合规要求",
+        text=f"{facts.industry} {focus} 安全管理 合规要求",
     )
+
+
+def _build_standard_contract_query(
+    question: str,
+    material_text: str | None,
+    ids: _QueryIdGenerator,
+) -> RetrievalQuery | None:
+    combined = f"{question}\n{material_text or ''}"
+    if "标准合同" not in combined:
+        return None
+    return RetrievalQuery(
+        query_id=ids.next_id(),
+        query_type="legal_issue",
+        text="个人信息出境 标准合同 办法 备案指南 备案材料",
+    )
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _context_text(question: str, material_text: str | None) -> str:
+    return f"{question}\n{material_text or ''}"
 
 
 _MISSING_QUERY_TEMPLATES: dict[str, str] = {
@@ -139,6 +194,7 @@ def plan_queries(
 
     ids = _QueryIdGenerator()
     queries: list[RetrievalQuery] = []
+    context_text = _context_text(question, material_text)
 
     legal_query = _build_legal_issue_query(question, ids)
     queries.append(legal_query)
@@ -147,15 +203,54 @@ def plan_queries(
     if material_query is not None:
         queries.append(material_query)
 
-    region_query = _build_region_query(facts, ids)
+    region_query = _build_region_query(facts, ids, context_text)
     if region_query is not None:
         queries.append(region_query)
 
-    industry_query = _build_industry_query(facts, ids)
+    industry_query = _build_industry_query(facts, ids, context_text)
     if industry_query is not None:
         queries.append(industry_query)
 
+    standard_contract_query = _build_standard_contract_query(
+        question, material_text, ids
+    )
+    if standard_contract_query is not None:
+        queries.append(standard_contract_query)
+
     queries.extend(_build_missing_information_queries(facts, ids))
+
+    return queries
+
+
+def plan_high_confidence_queries(
+    question: str,
+    facts: ReviewFacts,
+    material_text: str | None = None,
+) -> list[RetrievalQuery]:
+    """Plan only deterministic supplemental queries with explicit triggers.
+
+    This is intentionally narrower than ``plan_queries`` and is safe to merge
+    after LLM query planning. It avoids broad missing-information queries, which
+    are useful in the rules baseline but too noisy as online LLM fallback.
+    """
+
+    ids = _QueryIdGenerator()
+    context_text = _context_text(question, material_text)
+    queries: list[RetrievalQuery] = []
+
+    region_query = _build_region_query(facts, ids, context_text)
+    if region_query is not None:
+        queries.append(region_query)
+
+    industry_query = _build_industry_query(facts, ids, context_text)
+    if industry_query is not None:
+        queries.append(industry_query)
+
+    standard_contract_query = _build_standard_contract_query(
+        question, material_text, ids
+    )
+    if standard_contract_query is not None:
+        queries.append(standard_contract_query)
 
     return queries
 

@@ -12,7 +12,7 @@ extracting ranks, so the rank used by RRF reflects the boosted ordering.
 
 from __future__ import annotations
 
-from law_agent.review.retrieval.fusion import rrf_fuse
+from law_agent.review.retrieval.fusion import rrf_fuse, source_aware_fuse
 from law_agent.review.schemas import RetrievalHit
 
 
@@ -93,3 +93,60 @@ def test_boosted_hit_ranks_higher_after_fusion() -> None:
     # With the fix, chunk_b overtakes chunk_a.
     # Without the fix, chunk_b is still below chunk_a (boost ignored).
     assert _rank_of(boosted_fused, "chunk_b") <= _rank_of(boosted_fused, "chunk_a")
+
+
+def test_source_aware_fuse_returns_source_diverse_representatives() -> None:
+    hits = [
+        _make_hit("a1", score=0.030, rank=0),
+        _make_hit("a2", score=0.029, rank=1),
+        _make_hit("b1", score=0.020, rank=2),
+    ]
+    hits[0] = hits[0].model_copy(
+        update={"source_id": "source_a", "text": "个人信息出境标准合同办法"}
+    )
+    hits[1] = hits[1].model_copy(
+        update={"source_id": "source_a", "text": "备案材料包括标准合同和个人信息保护影响评估报告"}
+    )
+    hits[2] = hits[2].model_copy(update={"source_id": "source_b", "text": "其他法规"})
+
+    fused = source_aware_fuse(hits, top_k=2)
+
+    assert [hit.source_id for hit in fused] == ["source_a", "source_b"]
+    assert fused[0].chunk_id == "a1"
+    assert fused[0].score > hits[0].score
+
+
+def test_source_aware_fuse_does_not_overboost_near_duplicate_chunks() -> None:
+    duplicate_hits = [
+        _make_hit("a1", score=0.030, rank=0),
+        _make_hit("a2", score=0.029, rank=1),
+    ]
+    duplicate_hits[0] = duplicate_hits[0].model_copy(
+        update={"source_id": "source_a", "text": "个人信息出境标准合同备案材料"}
+    )
+    duplicate_hits[1] = duplicate_hits[1].model_copy(
+        update={"source_id": "source_a", "text": "个人信息出境标准合同备案材料"}
+    )
+
+    fused = source_aware_fuse(duplicate_hits, top_k=1)
+
+    assert fused[0].score == duplicate_hits[0].score
+
+
+def test_source_aware_fuse_prefers_specific_query_types_over_missing_information() -> None:
+    missing_hit = _make_hit("missing", score=0.030, rank=0).model_copy(
+        update={
+            "source_id": "generic_source",
+            "matched_query_type": "missing_information",
+        }
+    )
+    industry_hit = _make_hit("industry", score=0.020, rank=1).model_copy(
+        update={
+            "source_id": "industry_source",
+            "matched_query_type": "industry_condition",
+        }
+    )
+
+    fused = source_aware_fuse([missing_hit, industry_hit], top_k=2)
+
+    assert fused[0].source_id == "industry_source"

@@ -63,6 +63,7 @@ CONDITIONAL_LOCAL_BASIS_BOOST = 1.5
 CONDITIONAL_INDUSTRY_BASIS_BOOST = 1.4
 IMPLEMENTATION_REFERENCE_BOOST = 1.15
 INTERPRETATION_AUXILIARY_BOOST = 0.85
+MISSING_INFORMATION_QUERY_WEIGHT = 0.7
 
 
 def compute_boost_for_hit(
@@ -108,6 +109,13 @@ def compute_boost_for_hit(
     if role == "interpretation_auxiliary":
         boost *= INTERPRETATION_AUXILIARY_BOOST
 
+    # Missing-information queries are intentionally broad and often retrieve
+    # generic privacy-law clauses. Keep them as recall support, but stop them
+    # from dominating the final RRF/source-fusion ranking.
+    effective_query_type = query_type or hit.matched_query_type
+    if effective_query_type == "missing_information":
+        boost *= MISSING_INFORMATION_QUERY_WEIGHT
+
     return boost
 
 
@@ -136,6 +144,7 @@ def compute_boosts_summary(
 
     if "missing_information" in query_types:
         summary["implementation_reference:missing_information"] = IMPLEMENTATION_REFERENCE_BOOST
+        summary["query_type:missing_information"] = MISSING_INFORMATION_QUERY_WEIGHT
 
     return summary
 

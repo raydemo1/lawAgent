@@ -47,6 +47,46 @@ def compute_mrr_at_k(
     return 0.0
 
 
+def compute_source_pool_recall(
+    hits: list[RetrievalHit],
+    expected_sources: list[str],
+) -> tuple[float, list[str]]:
+    """Compute source recall over an unordered candidate pool."""
+
+    if not expected_sources:
+        return 1.0, []
+
+    pool_sources = {h.source_id for h in hits}
+    found = pool_sources & set(expected_sources)
+    missing = [s for s in expected_sources if s not in pool_sources]
+    return len(found) / len(expected_sources), missing
+
+
+def distinct_source_hits_at_k(
+    hits: list[RetrievalHit],
+    k: int,
+) -> list[RetrievalHit]:
+    """Return the first K hits after collapsing duplicate source IDs."""
+
+    seen: set[str] = set()
+    distinct: list[RetrievalHit] = []
+    for hit in hits:
+        if hit.source_id in seen:
+            continue
+        seen.add(hit.source_id)
+        distinct.append(hit)
+        if len(distinct) >= k:
+            break
+    return distinct
+
+
+def count_duplicate_sources_at_k(hits: list[RetrievalHit], k: int) -> int:
+    """Count how many top-K positions are occupied by duplicate sources."""
+
+    top = hits[:k]
+    return len(top) - len({hit.source_id for hit in top})
+
+
 def count_citation_violations(
     hits: list[RetrievalHit] | None = None,
     must_not_cite_as_clause: list[str] | None = None,
@@ -92,6 +132,7 @@ def evaluate_case(
     scenario: EvalScenario,
     hits: list[RetrievalHit],
     *,
+    candidate_hits: list[RetrievalHit] | None = None,
     risk_level: str = "",
     second_retrieval_triggered: bool = False,
     citation_groups: list[CitationGroup] | None = None,
@@ -114,6 +155,16 @@ def evaluate_case(
     recall_3, missing_3 = compute_recall_at_k(hits, scenario.expected_sources, 3)
     recall_5, missing_5 = compute_recall_at_k(hits, scenario.expected_sources, 5)
     mrr = compute_mrr_at_k(hits, scenario.expected_sources, 10)
+    candidate_recall_50, _candidate_missing = compute_source_pool_recall(
+        candidate_hits if candidate_hits is not None else hits,
+        scenario.expected_sources,
+    )
+    distinct_recall_5, _distinct_missing = compute_recall_at_k(
+        distinct_source_hits_at_k(hits, 5),
+        scenario.expected_sources,
+        5,
+    )
+    duplicate_sources_10 = count_duplicate_sources_at_k(hits, 10)
 
     if citation_groups is not None:
         final_citations = [c for group in citation_groups for c in group.citations]
@@ -156,6 +207,9 @@ def evaluate_case(
         recall_at_3=round(recall_3, 4),
         recall_at_5=round(recall_5, 4),
         mrr_at_10=round(mrr, 4),
+        candidate_recall_at_50=round(candidate_recall_50, 4),
+        distinct_source_recall_at_5=round(distinct_recall_5, 4),
+        duplicate_source_count_at_10=duplicate_sources_10,
         citation_violation_count=citation_violations,
         abstention_correct=abstention_correct,
         second_retrieval_correct=second_retrieval_correct,
@@ -182,6 +236,9 @@ def aggregate_metrics(
             mean_recall_at_3=0.0,
             mean_recall_at_5=0.0,
             mean_mrr_at_10=0.0,
+            mean_candidate_recall_at_50=0.0,
+            mean_distinct_source_recall_at_5=0.0,
+            mean_duplicate_source_count_at_10=0.0,
             abstention_accuracy=0.0,
             second_retrieval_accuracy=0.0,
             total_citation_violations=0,
@@ -192,6 +249,15 @@ def aggregate_metrics(
     mean_recall_3 = sum(c.recall_at_3 for c in case_results) / total
     mean_recall_5 = sum(c.recall_at_5 for c in case_results) / total
     mean_mrr = sum(c.mrr_at_10 for c in case_results) / total
+    mean_candidate_recall_50 = (
+        sum(c.candidate_recall_at_50 for c in case_results) / total
+    )
+    mean_distinct_recall_5 = (
+        sum(c.distinct_source_recall_at_5 for c in case_results) / total
+    )
+    mean_duplicate_sources_10 = (
+        sum(c.duplicate_source_count_at_10 for c in case_results) / total
+    )
 
     abstention_correct = sum(1 for c in case_results if c.abstention_correct)
     second_retrieval_correct = sum(1 for c in case_results if c.second_retrieval_correct)
@@ -204,6 +270,9 @@ def aggregate_metrics(
         mean_recall_at_3=round(mean_recall_3, 4),
         mean_recall_at_5=round(mean_recall_5, 4),
         mean_mrr_at_10=round(mean_mrr, 4),
+        mean_candidate_recall_at_50=round(mean_candidate_recall_50, 4),
+        mean_distinct_source_recall_at_5=round(mean_distinct_recall_5, 4),
+        mean_duplicate_source_count_at_10=round(mean_duplicate_sources_10, 4),
         abstention_accuracy=round(abstention_correct / total, 4),
         second_retrieval_accuracy=round(second_retrieval_correct / total, 4),
         total_citation_violations=total_violations,

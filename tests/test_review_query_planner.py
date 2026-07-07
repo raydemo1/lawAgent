@@ -1,7 +1,7 @@
 """Tests for deterministic retrieval query planning (Issue 4)."""
 
 from law_agent.review.facts import extract_facts
-from law_agent.review.query_planner import plan_queries
+from law_agent.review.query_planner import plan_high_confidence_queries, plan_queries
 from law_agent.review.schemas import ReviewFacts
 
 
@@ -72,8 +72,8 @@ def test_material_fact_query_with_sensitive_info() -> None:
 # ---------------------------------------------------------------------------
 
 def test_region_query_when_region_set() -> None:
-    facts = ReviewFacts(region="上海")
-    queries = plan_queries("问题", facts)
+    facts = ReviewFacts(region="上海", cross_border_transfer=True)
+    queries = plan_queries("上海自贸区数据出境负面清单要求？", facts)
 
     region_queries = [q for q in queries if q.query_type == "region_condition"]
     assert len(region_queries) == 1
@@ -87,12 +87,26 @@ def test_region_query_when_region_set() -> None:
 
 def test_industry_query_when_industry_set() -> None:
     facts = ReviewFacts(industry="智能网联汽车")
-    queries = plan_queries("问题", facts)
+    queries = plan_queries("智能网联汽车数据处理者安全要求？", facts)
 
     industry_queries = [q for q in queries if q.query_type == "industry_condition"]
     assert len(industry_queries) == 1
     assert "智能网联汽车" in industry_queries[0].text
     assert "安全管理" in industry_queries[0].text
+
+
+def test_region_query_requires_explicit_regional_intent() -> None:
+    facts = ReviewFacts(region="上海", cross_border_transfer=True)
+    queries = plan_queries("个人信息处理规则？", facts, "公司在上海开展业务。")
+
+    assert "region_condition" not in _query_types(queries)
+
+
+def test_industry_query_requires_explicit_industry_intent() -> None:
+    facts = ReviewFacts(industry="汽车")
+    queries = plan_queries("个人信息处理规则？", facts, "汽车制造商开展普通营销活动。")
+
+    assert "industry_condition" not in _query_types(queries)
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +180,34 @@ def test_regional_sample_produces_region_query() -> None:
 
     types = _query_types(queries)
     assert "region_condition" in types
+
+
+def test_standard_contract_question_adds_targeted_query() -> None:
+    material = "拟通过签订标准合同方式向德国分公司传输员工数据。"
+    facts = extract_facts(material)
+    queries = plan_queries("这个场景是否可以采用标准合同方式出境？", facts, material)
+
+    assert any("标准合同" in query.text and "备案指南" in query.text for query in queries)
+
+
+def test_high_confidence_queries_exclude_missing_information_noise() -> None:
+    facts = ReviewFacts(
+        region="天津",
+        industry="汽车",
+        cross_border_transfer=True,
+        missing_information=["legal_basis_or_consent", "data_volume_threshold"],
+    )
+
+    queries = plan_high_confidence_queries(
+        "天津自贸区汽车数据出境负面清单有什么特殊要求？",
+        facts,
+        "公司在天津自贸区开展汽车数据出境业务。",
+    )
+
+    types = _query_types(queries)
+    assert "region_condition" in types
+    assert "industry_condition" in types
+    assert "missing_information" not in types
 
 
 # ---------------------------------------------------------------------------

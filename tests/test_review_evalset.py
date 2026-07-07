@@ -3,8 +3,11 @@
 from law_agent.review.evalset.cases import get_default_scenarios
 from law_agent.review.evalset.metrics import (
     aggregate_metrics,
+    count_duplicate_sources_at_k,
     compute_mrr_at_k,
     compute_recall_at_k,
+    compute_source_pool_recall,
+    distinct_source_hits_at_k,
     count_citation_violations,
     evaluate_case,
 )
@@ -93,6 +96,22 @@ def test_recall_at_k_respects_k() -> None:
     assert score == 0.0  # s5 is at position 5, outside top-3
 
 
+def test_source_pool_and_distinct_source_metrics() -> None:
+    hits = [
+        _hit(source_id="s1", chunk_id="c1", rank=0),
+        _hit(source_id="s1", chunk_id="c2", rank=1),
+        _hit(source_id="s2", chunk_id="c3", rank=2),
+    ]
+
+    pool_recall, missing = compute_source_pool_recall(hits, ["s1", "s2", "s3"])
+    distinct = distinct_source_hits_at_k(hits, 5)
+
+    assert pool_recall == 2 / 3
+    assert missing == ["s3"]
+    assert [hit.source_id for hit in distinct] == ["s1", "s2"]
+    assert count_duplicate_sources_at_k(hits, 3) == 1
+
+
 # ---------------------------------------------------------------------------
 # MRR@K tests
 # ---------------------------------------------------------------------------
@@ -172,7 +191,28 @@ def test_evaluate_case_low_recall_is_bad() -> None:
 
     assert result.recall_at_5 == 0.0
     assert result.is_bad_case is True
-    assert any("low_recall" in r for r in result.bad_reasons)
+    assert "zero_recall_at_5" in result.bad_reasons
+
+
+def test_evaluate_case_records_candidate_and_source_diversity_metrics() -> None:
+    scenario = EvalScenario(
+        case_id="test_diagnostics",
+        question="问题",
+        material_text="材料",
+        expected_sources=["s1", "s2"],
+    )
+    hits = [
+        _hit(source_id="s1", chunk_id="c1", rank=0),
+        _hit(source_id="s1", chunk_id="c2", rank=1),
+        _hit(source_id="s3", chunk_id="c3", rank=2),
+    ]
+    candidate_hits = hits + [_hit(source_id="s2", chunk_id="c4", rank=50)]
+
+    result = evaluate_case(scenario, hits, candidate_hits=candidate_hits)
+
+    assert result.candidate_recall_at_50 == 1.0
+    assert result.distinct_source_recall_at_5 == 0.5
+    assert result.duplicate_source_count_at_10 == 1
 
 
 def test_evaluate_case_abstention_correct() -> None:
@@ -236,7 +276,7 @@ def test_evaluate_case_second_retrieval_incorrect() -> None:
     result = evaluate_case(scenario, hits, second_retrieval_triggered=False)
 
     assert result.second_retrieval_correct is False
-    assert "second_retrieval_incorrect" in result.bad_reasons
+    assert "second_retrieval_incorrect" not in result.bad_reasons
 
 
 def test_evaluate_case_citation_violation_is_bad() -> None:
@@ -264,11 +304,15 @@ def test_aggregate_metrics_calculates_means() -> None:
     results = [
         CaseMetricResult(
             case_id="c1", recall_at_3=1.0, recall_at_5=1.0, mrr_at_10=1.0,
+            candidate_recall_at_50=1.0, distinct_source_recall_at_5=1.0,
+            duplicate_source_count_at_10=0,
             citation_violation_count=0, abstention_correct=True,
             second_retrieval_correct=True,
         ),
         CaseMetricResult(
             case_id="c2", recall_at_3=0.5, recall_at_5=0.5, mrr_at_10=0.5,
+            candidate_recall_at_50=0.75, distinct_source_recall_at_5=0.25,
+            duplicate_source_count_at_10=2,
             citation_violation_count=1, abstention_correct=False,
             second_retrieval_correct=False, is_bad_case=True,
             bad_reasons=["test"],
@@ -281,6 +325,9 @@ def test_aggregate_metrics_calculates_means() -> None:
     assert metrics.mean_recall_at_3 == 0.75
     assert metrics.mean_recall_at_5 == 0.75
     assert metrics.mean_mrr_at_10 == 0.75
+    assert metrics.mean_candidate_recall_at_50 == 0.875
+    assert metrics.mean_distinct_source_recall_at_5 == 0.625
+    assert metrics.mean_duplicate_source_count_at_10 == 1.0
     assert metrics.abstention_accuracy == 0.5
     assert metrics.second_retrieval_accuracy == 0.5
     assert metrics.total_citation_violations == 1
@@ -369,4 +416,5 @@ def test_format_summary_text_contains_key_metrics() -> None:
     assert "RETRIEVAL=LOCAL,REVIEW=LOCAL mode" in text
     assert "Recall@3" in text
     assert "MRR@10" in text
+    assert "Candidate Recall@50" in text
     assert "Bad cases" in text

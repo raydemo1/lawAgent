@@ -213,3 +213,16 @@ def test_consent_in_longer_negated_context() -> None:
 
     assert facts.legal_basis_or_consent is None
     assert "legal_basis_or_consent" in facts.missing_information
+
+
+def test_standard_contract_transfer_to_foreign_affiliate_is_cross_border() -> None:
+    material = (
+        "公司规模较小，处理约5万人个人信息，"
+        "拟通过签订标准合同方式向德国分公司传输员工数据。已取得员工同意。"
+    )
+
+    facts = extract_facts(material)
+
+    assert facts.cross_border_transfer is True
+    assert facts.overseas_recipient == "德国"
+    assert "员工个人信息" in facts.data_types

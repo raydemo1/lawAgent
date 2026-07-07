@@ -31,6 +31,8 @@ from law_agent.review.io import (
 from law_agent.review.materials import material_from_text
 from law_agent.review.query_planner import (
     QueryPlanner,
+    merge_queries_with_rule_fallback,
+    plan_high_confidence_queries,
     plan_queries,
     plan_queries_with_deepseek,
 )
@@ -44,7 +46,7 @@ from law_agent.review.retrieval.adapters import (
     VectorSearchAdapter,
 )
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, CorpusError, load_corpus
-from law_agent.review.retrieval.fusion import rrf_fuse
+from law_agent.review.retrieval.fusion import rrf_fuse, source_aware_fuse
 from law_agent.review.retrieval.keyword import KeywordRetriever, merge_hits_by_chunk_id
 from law_agent.review.retrieval.neighbors import expand_neighbors
 from law_agent.review.retrieval.vector_mock import VectorMockRetriever
@@ -63,6 +65,7 @@ from law_agent.review.schemas import (
 DEFAULT_REVIEW_RUNS_DIR = Path("artifacts/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
 DEFAULT_TOP_K = 10
+DEFAULT_CANDIDATE_TOP_K = 50
 ReviewMode = Literal["rule_baseline", "llm"]
 
 
@@ -120,6 +123,10 @@ def create_review_case(
     if review_mode == "llm":
         rule_facts = extract_facts(material.material_text, question)
         facts = merge_facts_with_rule_fallback(facts, rule_facts)
+        supplemental_queries = plan_high_confidence_queries(
+            question, facts, material.material_text
+        )
+        queries = merge_queries_with_rule_fallback(queries, supplemental_queries)
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -316,7 +323,7 @@ def run_hybrid_retrieval(
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
-    candidate_top_k = top_k
+    candidate_top_k = max(top_k, DEFAULT_CANDIDATE_TOP_K)
 
     if keyword_retriever is None:
         keyword_retriever = KeywordRetriever(chunks)
@@ -347,8 +354,17 @@ def run_hybrid_retrieval(
     boosted_keyword = apply_boosts_to_hits(merged_keyword, chunks_by_id, facts)
     boosted_vector = apply_boosts_to_hits(merged_vector, chunks_by_id, facts)
 
-    # RRF fusion
-    hybrid_hits = rrf_fuse(boosted_keyword, boosted_vector, top_k=top_k)
+    # RRF produces a broad chunk-level candidate list; source-aware fusion
+    # then collapses repeated chunks from the same legal source into a
+    # source-diverse final evidence list.
+    hybrid_candidates = rrf_fuse(
+        boosted_keyword, boosted_vector, top_k=candidate_top_k
+    )
+    hybrid_hits = source_aware_fuse(
+        hybrid_candidates,
+        top_k=top_k,
+        chunks_by_id=chunks_by_id,
+    )
 
     # Expand neighbors for top hits
     neighbor_hits = expand_neighbors(
@@ -393,7 +409,16 @@ def run_hybrid_retrieval(
         boosted_kw2 = apply_boosts_to_hits(merged_kw2, chunks_by_id, facts)
         boosted_vec2 = apply_boosts_to_hits(merged_vec2, chunks_by_id, facts)
 
-        hybrid2_hits = rrf_fuse(boosted_kw2, boosted_vec2, top_k=expanded_top_k)
+        hybrid2_candidates = rrf_fuse(
+            boosted_kw2,
+            boosted_vec2,
+            top_k=expanded_candidate_top_k,
+        )
+        hybrid2_hits = source_aware_fuse(
+            hybrid2_candidates,
+            top_k=expanded_top_k,
+            chunks_by_id=chunks_by_id,
+        )
         neighbor2_hits = expand_neighbors(
             hybrid2_hits[:5], chunks_by_id, max_neighbors=max_neighbors
         )

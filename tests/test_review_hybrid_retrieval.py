@@ -8,6 +8,7 @@ from law_agent.data.io import write_jsonl
 from law_agent.data.schemas import Chunk
 from law_agent.review.retrieval.boosts import (
     INTERPRETATION_AUXILIARY_BOOST,
+    MISSING_INFORMATION_QUERY_WEIGHT,
     PRIMARY_LEGAL_BASIS_BOOST,
     apply_boosts_to_hits,
     compute_boost_for_hit,
@@ -170,6 +171,24 @@ def test_apply_boosts_to_hits_multiplies_scores() -> None:
 
     boosted = apply_boosts_to_hits([hit], {"c1": chunk}, facts)
     assert boosted[0].score == pytest.approx(2.0 * PRIMARY_LEGAL_BASIS_BOOST, rel=1e-4)
+
+
+def test_missing_information_query_hits_are_downweighted() -> None:
+    hit = RetrievalHit(
+        chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
+        score=2.0, rank=0, retriever="keyword",
+        citation_role="primary_legal_basis", can_cite_clause=True, source_url="u",
+        matched_query_type="missing_information",
+    )
+    chunk = _make_chunk(chunk_id="c1")
+    facts = ReviewFacts()
+
+    boosted = apply_boosts_to_hits([hit], {"c1": chunk}, facts)
+
+    assert boosted[0].score == pytest.approx(
+        2.0 * PRIMARY_LEGAL_BASIS_BOOST * MISSING_INFORMATION_QUERY_WEIGHT,
+        rel=1e-4,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -462,10 +481,10 @@ def test_run_hybrid_retrieval_uses_wide_candidate_pool_before_final_top_k(
         vector_retriever=vector,
     )
 
-    assert keyword.requested_top_ks == [100]
-    assert vector.requested_top_ks == [100]
-    assert len(trace.keyword_results) == 100
-    assert len(trace.vector_results) == 100
+    assert keyword.requested_top_ks == [50]
+    assert vector.requested_top_ks == [50]
+    assert len(trace.keyword_results) == 50
+    assert len(trace.vector_results) == 50
     assert len(trace.hybrid_results) == 5
 
 

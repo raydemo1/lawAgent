@@ -97,7 +97,7 @@ def test_run_keyword_retrieval_preserves_queries_and_evidence_check(tmp_path: Pa
     assert trace.hybrid_results == []
 
 
-def test_create_review_case_llm_mode_adds_rule_fact_and_query_fallbacks(
+def test_create_review_case_llm_mode_adds_high_confidence_query_supplements(
     tmp_path: Path,
 ) -> None:
     def llm_missed_facts(_material_text: str, _question: str | None = None) -> ReviewFacts:
@@ -128,6 +128,7 @@ def test_create_review_case_llm_mode_adds_rule_fact_and_query_fallbacks(
     query_types = [query.query_type for query in response.trace.queries]
     assert "region_condition" in query_types
     assert "industry_condition" in query_types
+    assert "missing_information" not in query_types
 
 
 def test_run_keyword_retrieval_data_export_query_finds_assessment_chunk(tmp_path: Path) -> None:
