@@ -31,7 +31,6 @@ from law_agent.review.io import (
 from law_agent.review.materials import material_from_text
 from law_agent.review.query_planner import (
     QueryPlanner,
-    merge_queries_with_rule_fallback,
     plan_queries,
     plan_queries_with_deepseek,
 )
@@ -121,8 +120,6 @@ def create_review_case(
     if review_mode == "llm":
         rule_facts = extract_facts(material.material_text, question)
         facts = merge_facts_with_rule_fallback(facts, rule_facts)
-        rule_queries = plan_queries(question, facts, material.material_text)
-        queries = merge_queries_with_rule_fallback(queries, rule_queries)
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -319,7 +316,7 @@ def run_hybrid_retrieval(
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
-    candidate_top_k = max(top_k, 100)
+    candidate_top_k = top_k
 
     if keyword_retriever is None:
         keyword_retriever = KeywordRetriever(chunks)

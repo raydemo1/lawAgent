@@ -73,7 +73,9 @@ def _build_material_fact_query(
 def _build_region_query(
     facts: ReviewFacts, ids: _QueryIdGenerator
 ) -> RetrievalQuery | None:
-    if not facts.region:
+    # Only generate region-specific queries for cross-border scenarios —
+    # region alone (e.g. CN) has no retrieval value for non-cross-border cases.
+    if not facts.region or not facts.cross_border_transfer:
         return None
     return RetrievalQuery(
         query_id=ids.next_id(),
@@ -85,7 +87,8 @@ def _build_region_query(
 def _build_industry_query(
     facts: ReviewFacts, ids: _QueryIdGenerator
 ) -> RetrievalQuery | None:
-    if not facts.industry:
+    # Only generate industry-specific queries for cross-border scenarios.
+    if not facts.industry or not facts.cross_border_transfer:
         return None
     return RetrievalQuery(
         query_id=ids.next_id(),
@@ -110,7 +113,9 @@ def _build_missing_information_queries(
     for missing_key in facts.missing_information:
         template = _MISSING_QUERY_TEMPLATES.get(missing_key)
         if template is None:
-            template = missing_key
+            # Skip unknown keys — using a raw field name as a query text
+            # (e.g. "cross_border_transfer") pollutes retrieval with noise.
+            continue
         queries.append(
             RetrievalQuery(
                 query_id=ids.next_id(),
