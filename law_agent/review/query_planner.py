@@ -155,6 +155,33 @@ def plan_queries(
     return queries
 
 
+def merge_queries_with_rule_fallback(
+    primary: list[RetrievalQuery],
+    fallback: list[RetrievalQuery],
+) -> list[RetrievalQuery]:
+    """Append deterministic fallback queries that the primary planner missed."""
+
+    ids = _QueryIdGenerator()
+    merged: list[RetrievalQuery] = []
+    seen: set[tuple[str, str]] = set()
+    for query in [*primary, *fallback]:
+        text = query.text.strip()
+        if not text:
+            continue
+        key = (query.query_type, " ".join(text.split()))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(
+            RetrievalQuery(
+                query_id=ids.next_id(),
+                query_type=query.query_type,
+                text=text,
+            )
+        )
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # DeepSeek LLM planner
 # ---------------------------------------------------------------------------

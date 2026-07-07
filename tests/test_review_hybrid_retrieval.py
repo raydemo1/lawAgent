@@ -372,6 +372,33 @@ def _write_fixture_corpus(tmp_path: Path) -> Path:
     return chunks_path
 
 
+class _RecordingSearchManyRetriever:
+    def __init__(self, chunks: list[Chunk], retriever: str) -> None:
+        self.chunks = chunks
+        self.retriever = retriever
+        self.requested_top_ks: list[int] = []
+
+    def search_many(self, queries, *, top_k: int = 10):
+        self.requested_top_ks.append(top_k)
+        hits = [
+            RetrievalHit(
+                chunk_id=chunk.chunk_id,
+                doc_id=chunk.doc_id,
+                source_id=chunk.source_id,
+                title=chunk.title,
+                text=chunk.text,
+                score=float(len(self.chunks) - index),
+                rank=index,
+                retriever=self.retriever,
+                citation_role=chunk.citation_role,
+                can_cite_clause=chunk.can_cite_clause,
+                source_url=chunk.source_url,
+            )
+            for index, chunk in enumerate(self.chunks[:top_k])
+        ]
+        return [hits for _query in queries]
+
+
 def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     from law_agent.review.service import create_review_case, run_hybrid_retrieval
 
@@ -397,6 +424,49 @@ def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     assert len(trace.hybrid_results) > 0
     assert all(h.retriever == "hybrid" for h in trace.hybrid_results)
     assert trace.metadata_boosts  # boost summary recorded
+
+
+def test_run_hybrid_retrieval_uses_wide_candidate_pool_before_final_top_k(
+    tmp_path: Path,
+) -> None:
+    from law_agent.review.service import create_review_case, run_hybrid_retrieval
+
+    chunks = [
+        _make_chunk(
+            chunk_id=f"wide_{index}",
+            doc_id=f"doc_{index}",
+            source_id=f"src_{index}",
+            text=f"第{index}条 数据出境安全评估 申报条件。",
+        )
+        for index in range(120)
+    ]
+    chunks_path = tmp_path / "chunks.jsonl"
+    write_jsonl(chunks_path, chunks)
+
+    create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号发送给新加坡服务商用于推荐优化。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+    keyword = _RecordingSearchManyRetriever(chunks, "keyword")
+    vector = _RecordingSearchManyRetriever(chunks, "vector_mock")
+
+    trace = run_hybrid_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+        keyword_retriever=keyword,
+        vector_retriever=vector,
+    )
+
+    assert keyword.requested_top_ks == [100]
+    assert vector.requested_top_ks == [100]
+    assert len(trace.keyword_results) == 100
+    assert len(trace.vector_results) == 100
+    assert len(trace.hybrid_results) == 5
 
 
 def test_run_hybrid_retrieval_persists_to_trace(tmp_path: Path) -> None:

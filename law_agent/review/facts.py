@@ -302,6 +302,102 @@ def extract_facts(material_text: str, question: str | None = None) -> ReviewFact
     )
 
 
+_NULLISH_TEXT = {"", "null", "none", "无", "未知"}
+
+
+def _has_text(value: str | None) -> bool:
+    return bool(value and value.strip().lower() not in _NULLISH_TEXT)
+
+
+def _merge_unique(primary: list[str], fallback: list[str]) -> list[str]:
+    merged: list[str] = []
+    for item in [*primary, *fallback]:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def merge_facts_with_rule_fallback(
+    primary: ReviewFacts,
+    fallback: ReviewFacts,
+) -> ReviewFacts:
+    """Fill high-confidence facts missed by an LLM with deterministic rules."""
+
+    primary_has_substantive_fact = any(
+        [
+            primary.data_types,
+            primary.sensitive_personal_info is not None,
+            primary.cross_border_transfer is not None,
+            _has_text(primary.business_activity),
+            _has_text(primary.overseas_recipient),
+            _has_text(primary.processing_purpose),
+            _has_text(primary.legal_basis_or_consent),
+            _has_text(primary.industry),
+            _has_text(primary.region),
+        ]
+    )
+    missing_information = (
+        primary.missing_information
+        if primary_has_substantive_fact or primary.missing_information
+        else fallback.missing_information
+    )
+    updates = {
+        "business_activity": (
+            primary.business_activity
+            if _has_text(primary.business_activity)
+            else fallback.business_activity
+        ),
+        "data_types": _merge_unique(primary.data_types, fallback.data_types),
+        "sensitive_personal_info": (
+            primary.sensitive_personal_info
+            if primary.sensitive_personal_info is not None
+            else fallback.sensitive_personal_info
+        ),
+        "cross_border_transfer": (
+            primary.cross_border_transfer
+            if primary.cross_border_transfer is not None
+            else fallback.cross_border_transfer
+        ),
+        "overseas_recipient": (
+            primary.overseas_recipient
+            if _has_text(primary.overseas_recipient)
+            else fallback.overseas_recipient
+        ),
+        "processing_purpose": (
+            primary.processing_purpose
+            if _has_text(primary.processing_purpose)
+            else fallback.processing_purpose
+        ),
+        "legal_basis_or_consent": (
+            primary.legal_basis_or_consent
+            if _has_text(primary.legal_basis_or_consent)
+            else fallback.legal_basis_or_consent
+        ),
+        "industry": primary.industry if _has_text(primary.industry) else fallback.industry,
+        "region": primary.region if _has_text(primary.region) else fallback.region,
+        "missing_information": missing_information,
+    }
+    merged = primary.model_copy(update=updates)
+
+    resolved_missing = set(merged.missing_information)
+    if merged.overseas_recipient:
+        resolved_missing.discard("overseas_recipient")
+    if merged.processing_purpose:
+        resolved_missing.discard("processing_purpose")
+    if merged.legal_basis_or_consent:
+        resolved_missing.discard("legal_basis_or_consent")
+    if merged.data_types:
+        resolved_missing.discard("data_types")
+
+    return merged.model_copy(
+        update={
+            "missing_information": [
+                key for key in merged.missing_information if key in resolved_missing
+            ]
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # DeepSeek LLM extractor
 # ---------------------------------------------------------------------------

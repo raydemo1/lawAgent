@@ -134,3 +134,36 @@ def test_chunk_document_splits_negative_list_table_rows_under_limit() -> None:
     ]
     assert "个人信息" in table_chunk.text
     assert table_chunk.citation_role == "conditional_local_basis"
+
+
+def test_chunk_document_detects_bold_markdown_law_articles_in_policy() -> None:
+    document = _document(
+        doc_id="cac_data_export_security_assessment_measures_2022",
+        source_id="cac_data_export_security_assessment_measures_2022",
+        title="数据出境安全评估办法",
+        doc_type="policy",
+        authority="ministry_policy",
+        text=(
+            "**第一条** 为了规范数据出境活动，制定本办法。\n\n"
+            "**第二条** 数据处理者向境外提供数据，适用本办法。\n\n"
+            "**第三条** 数据出境安全评估坚持事前评估和持续监督相结合。\n\n"
+            "**第四条** 数据处理者向境外提供数据，有下列情形之一的，"
+            "应当通过所在地省级网信部门向国家网信部门申报数据出境安全评估：\n\n"
+            "（一）数据处理者向境外提供重要数据；\n\n"
+            "（二）关键信息基础设施运营者和处理100万人以上个人信息的数据处理者"
+            "向境外提供个人信息；\n\n"
+            "（三）自上年1月1日起累计向境外提供10万人个人信息或者1万人敏感"
+            "个人信息的数据处理者向境外提供个人信息；\n\n"
+            "（四）国家网信部门规定的其他需要申报数据出境安全评估的情形。\n\n"
+            "**第五条** 数据处理者在申报数据出境安全评估前，应当开展自评估。"
+        ),
+    )
+
+    chunks = chunk_document(document)
+
+    fourth = next(chunk for chunk in chunks if chunk.article_no == "第四条")
+    assert fourth.heading_path == ["数据出境安全评估办法", "第四条"]
+    assert "申报数据出境安全评估" in fourth.text
+    assert "（一）数据处理者向境外提供重要数据" in fourth.text
+    assert "（四）国家网信部门规定的其他需要申报" in fourth.text
+    assert "**第五条**" not in fourth.text

@@ -15,6 +15,7 @@ from law_agent.review.service import (
     run_hybrid_retrieval,
     run_keyword_retrieval,
 )
+from law_agent.review.schemas import ReviewFacts, RetrievalQuery
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
 
@@ -94,6 +95,39 @@ def test_run_keyword_retrieval_preserves_queries_and_evidence_check(tmp_path: Pa
     assert trace.evidence_self_check.status == "not_checked"
     assert trace.vector_results == []
     assert trace.hybrid_results == []
+
+
+def test_create_review_case_llm_mode_adds_rule_fact_and_query_fallbacks(
+    tmp_path: Path,
+) -> None:
+    def llm_missed_facts(_material_text: str, _question: str | None = None) -> ReviewFacts:
+        return ReviewFacts()
+
+    def llm_missed_queries(
+        question: str,
+        _facts: ReviewFacts,
+        _material_text: str | None = None,
+    ) -> list[RetrievalQuery]:
+        return [
+            RetrievalQuery(query_id="q_1", query_type="legal_issue", text=question)
+        ]
+
+    response = create_review_case(
+        question="天津自贸区数据出境是否适用负面清单？",
+        material_text="公司在天津自贸区开展智能网联汽车业务，涉及数据出境。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+        review_mode="llm",
+        facts_extractor=llm_missed_facts,
+        query_planner=llm_missed_queries,
+    )
+
+    assert response.review_case.review_facts.region == "天津"
+    assert response.review_case.review_facts.industry == "智能网联汽车"
+    query_types = [query.query_type for query in response.trace.queries]
+    assert "region_condition" in query_types
+    assert "industry_condition" in query_types
 
 
 def test_run_keyword_retrieval_data_export_query_finds_assessment_chunk(tmp_path: Path) -> None:
@@ -190,4 +224,3 @@ def test_run_hybrid_retrieval_with_none_latest_result_id(tmp_path: Path) -> None
 
     assert trace is not None
     assert len(trace.hybrid_results) > 0
-

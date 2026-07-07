@@ -12,7 +12,12 @@ from law_agent.review.evidence import (
     run_self_check_with_deepseek,
     validate_llm_self_check,
 )
-from law_agent.review.facts import FactsExtractor, extract_facts, extract_facts_with_deepseek
+from law_agent.review.facts import (
+    FactsExtractor,
+    extract_facts,
+    extract_facts_with_deepseek,
+    merge_facts_with_rule_fallback,
+)
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
     read_retrieval_traces,
@@ -24,7 +29,12 @@ from law_agent.review.io import (
     write_retrieval_traces,
 )
 from law_agent.review.materials import material_from_text
-from law_agent.review.query_planner import QueryPlanner, plan_queries, plan_queries_with_deepseek
+from law_agent.review.query_planner import (
+    QueryPlanner,
+    merge_queries_with_rule_fallback,
+    plan_queries,
+    plan_queries_with_deepseek,
+)
 from law_agent.review.result_builder import build_review_result, build_review_result_with_deepseek
 from law_agent.review.retrieval.boosts import (
     apply_boosts_to_hits,
@@ -108,6 +118,11 @@ def create_review_case(
 
     facts = facts_extractor(material.material_text, question)
     queries: list[RetrievalQuery] = query_planner(question, facts, material.material_text)
+    if review_mode == "llm":
+        rule_facts = extract_facts(material.material_text, question)
+        facts = merge_facts_with_rule_fallback(facts, rule_facts)
+        rule_queries = plan_queries(question, facts, material.material_text)
+        queries = merge_queries_with_rule_fallback(queries, rule_queries)
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -304,6 +319,7 @@ def run_hybrid_retrieval(
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
+    candidate_top_k = max(top_k, 100)
 
     if keyword_retriever is None:
         keyword_retriever = KeywordRetriever(chunks)
@@ -321,14 +337,14 @@ def run_hybrid_retrieval(
     ]
     query_types.extend(query_type for _text, query_type in retrieval_queries)
     keyword_hits_per_query = keyword_retriever.search_many(
-        retrieval_queries, top_k=top_k
+        retrieval_queries, top_k=candidate_top_k
     )
     vector_hits_per_query = vector_retriever.search_many(
-        retrieval_queries, top_k=top_k
+        retrieval_queries, top_k=candidate_top_k
     )
 
-    merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=top_k)
-    merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=top_k)
+    merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=candidate_top_k)
+    merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=candidate_top_k)
 
     # Apply metadata boosts to both component results
     boosted_keyword = apply_boosts_to_hits(merged_keyword, chunks_by_id, facts)
@@ -358,7 +374,8 @@ def run_hybrid_retrieval(
 
     if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
         plan = self_check.second_retrieval_plan
-        expanded_top_k = plan.increased_top_k
+        expanded_top_k = max(top_k, plan.increased_top_k)
+        expanded_candidate_top_k = max(candidate_top_k, expanded_top_k)
 
         # Run second retrieval with expanded queries
         all_queries = [
@@ -366,14 +383,14 @@ def run_hybrid_retrieval(
             for query in list(target_trace.queries) + plan.expanded_queries
         ]
         kw2_per_query = keyword_retriever.search_many(
-            all_queries, top_k=expanded_top_k
+            all_queries, top_k=expanded_candidate_top_k
         )
         vec2_per_query = vector_retriever.search_many(
-            all_queries, top_k=expanded_top_k
+            all_queries, top_k=expanded_candidate_top_k
         )
 
-        merged_kw2 = merge_hits_by_chunk_id(kw2_per_query, top_k=expanded_top_k)
-        merged_vec2 = merge_hits_by_chunk_id(vec2_per_query, top_k=expanded_top_k)
+        merged_kw2 = merge_hits_by_chunk_id(kw2_per_query, top_k=expanded_candidate_top_k)
+        merged_vec2 = merge_hits_by_chunk_id(vec2_per_query, top_k=expanded_candidate_top_k)
 
         # Apply stronger boosts on second retrieval
         boosted_kw2 = apply_boosts_to_hits(merged_kw2, chunks_by_id, facts)
