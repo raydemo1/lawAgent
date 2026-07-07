@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useState } from 'react'
-import type { ReviewResponse } from './types/api'
+import type { ReviewApiResponse } from './types/api'
 import { ApiError, submitReview } from './api/client'
 import Sidebar from './components/Sidebar'
 import EvidenceDossier from './components/EvidenceDossier'
@@ -29,7 +29,7 @@ type Page = 'workbench' | 'eval'
 export default function App(): JSX.Element {
   // ---- Global app state -------------------------------------------------
   const [currentPage, setCurrentPage] = useState<Page>('workbench')
-  const [reviewHistory, setReviewHistory] = useState<ReviewResponse[]>([])
+  const [reviewHistory, setReviewHistory] = useState<ReviewApiResponse[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -37,7 +37,7 @@ export default function App(): JSX.Element {
   //      can pre-fill the input) -----------------------------------------
   const [question, setQuestion] = useState<string>('')
   const [material, setMaterial] = useState<string>('')
-  const [currentResult, setCurrentResult] = useState<ReviewResponse | null>(
+  const [currentResult, setCurrentResult] = useState<ReviewApiResponse | null>(
     null,
   )
 

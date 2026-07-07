@@ -61,10 +61,21 @@ export type RetrievalQueryType =
   | 'missing_information';
 
 /** Retriever name used to produce a hit. */
-export type RetrieverName = 'keyword' | 'vector_mock' | 'hybrid';
+export type RetrieverName =
+  | 'keyword'
+  | 'vector_mock'
+  | 'hybrid'
+  | 'elasticsearch'
+  | 'pgvector';
 
 /** Evaluation mode (retriever strategy under test). */
-export type EvalMode = 'keyword' | 'hybrid';
+export type EvalMode =
+  | 'keyword'
+  | 'hybrid'
+  | 'rule_baseline'
+  | 'local'
+  | 'service'
+  | 'llm';
 
 // ---------------------------------------------------------------------------
 // Review domain models
@@ -215,6 +226,30 @@ export interface ReviewResponse {
 }
 
 /**
+ * Structured failure response for LLM-owned workflow nodes.
+ *
+ * The backend intentionally returns this as HTTP 200 so the UI can display
+ * which node failed after retries instead of treating it as transport failure.
+ */
+export interface ReviewFailedResponse {
+  status: 'review_failed';
+  failed_node: string;
+  reason: string;
+  message: string;
+  attempts: number;
+  trace_id: string | null;
+}
+
+/** Response body for `POST /api/review`. */
+export type ReviewApiResponse = ReviewResponse | ReviewFailedResponse;
+
+export function isReviewFailedResponse(
+  response: ReviewApiResponse | null,
+): response is ReviewFailedResponse {
+  return Boolean(response && 'status' in response && response.status === 'review_failed');
+}
+
+/**
  * Response body for `GET /api/health`.
  *
  * Matches `HealthResponse` in `law_agent/review/api.py`.
@@ -280,4 +315,11 @@ export interface EvalSummary {
   bad_cases: CaseMetricResult[];
   /** Per-case results keyed by mode name. */
   all_case_results: Record<string, CaseMetricResult[]>;
+}
+
+/** Request body for `POST /api/eval/run`. */
+export interface EvalRunOptions {
+  chunks_path?: string;
+  modes?: EvalMode[];
+  top_k?: number;
 }

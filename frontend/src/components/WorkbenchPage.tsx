@@ -20,9 +20,10 @@ import type {
   CitationGroup,
   CitationUsage,
   EvidenceStatus,
+  ReviewApiResponse,
   ReviewFacts,
-  ReviewResponse,
 } from '../types/api';
+import { isReviewFailedResponse } from '../types/api';
 import RiskBadge from './RiskBadge';
 
 export interface WorkbenchPageProps {
@@ -39,7 +40,7 @@ export interface WorkbenchPageProps {
   /** True while a review request is in flight. */
   loading: boolean;
   /** The most recent review response, if any. */
-  result: ReviewResponse | null;
+  result: ReviewApiResponse | null;
   /** Error message from the last review attempt, if it failed. */
   error: string | null;
   /** Number of accumulated review records, for the empty-state hint. */
@@ -164,10 +165,12 @@ export default function WorkbenchPage({
     }
   }, []);
 
-  const reviewResult = result?.review_result ?? null;
-  const facts = result?.review_facts ?? null;
-  const citationGroups = result?.citation_groups ?? [];
-  const evidenceSelfCheck = result?.evidence_self_check ?? null;
+  const failedResult = isReviewFailedResponse(result) ? result : null;
+  const successResult = result && !isReviewFailedResponse(result) ? result : null;
+  const reviewResult = successResult?.review_result ?? null;
+  const facts = successResult?.review_facts ?? null;
+  const citationGroups = successResult?.citation_groups ?? [];
+  const evidenceSelfCheck = successResult?.evidence_self_check ?? null;
 
   return (
     <div className="workbench">
@@ -292,6 +295,24 @@ export default function WorkbenchPage({
             <div style={{ wordBreak: 'break-word' }}>{error}</div>
           </div>
         </section>
+      ) : failedResult ? (
+        <section className="error-box" role="alert">
+          <span className="error-box__mark" aria-hidden="true">
+            !
+          </span>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: '2px' }}>
+              LLM 审查节点失败
+            </div>
+            <div style={{ wordBreak: 'break-word' }}>
+              {failedResult.failed_node}：{failedResult.message}
+            </div>
+            <div style={{ marginTop: '6px', fontSize: '0.8125rem', color: '#64748b' }}>
+              已重试 {failedResult.attempts} 次
+              {failedResult.trace_id ? ` · Trace ${failedResult.trace_id}` : ''}
+            </div>
+          </div>
+        </section>
       ) : reviewResult && facts ? (
         <section className="workbench__result">
           {/* (a) Risk level + evidence self-check status */}
@@ -318,7 +339,7 @@ export default function WorkbenchPage({
                   <strong style={{ color: 'var(--color-primary)' }}>
                     {EVIDENCE_STATUS_LABELS[evidenceSelfCheck.status]}
                   </strong>
-                  {result?.second_retrieval_triggered && (
+                  {successResult?.second_retrieval_triggered && (
                     <span
                       style={{
                         marginLeft: 'var(--space-sm)',

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from law_agent.config import ServiceConfig
@@ -33,6 +34,17 @@ from law_agent.review.retrieval.adapters import (
 from law_agent.review.retrieval.indexing import chunk_index_document
 
 _EMBEDDING_BATCH_SIZE = 16
+_PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_pg_identifier(value: str, *, field_name: str = "identifier") -> str:
+    """Return a conservative PostgreSQL identifier or fail before SQL building."""
+
+    if not _PG_IDENTIFIER_RE.fullmatch(value):
+        raise RuntimeError(
+            f"{field_name} must match {_PG_IDENTIFIER_RE.pattern}; got {value!r}"
+        )
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +233,10 @@ def ensure_pgvector_schema(conn: Any, table_name: str, dimension: int) -> None:
     similarity search used by ``make_pgvector_search_fn``.
     """
 
+    table_name = _validate_pg_identifier(table_name, field_name="PG_TABLE")
+    index_name = _validate_pg_identifier(
+        f"{table_name}_embedding_idx", field_name="PG_TABLE index name"
+    )
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
         cur.execute(
@@ -260,7 +276,7 @@ def ensure_pgvector_schema(conn: Any, table_name: str, dimension: int) -> None:
         # HNSW index on cosine distance; IF NOT EXISTS keeps this idempotent.
         cur.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS {table_name}_embedding_idx
+            CREATE INDEX IF NOT EXISTS {index_name}
             ON {table_name} USING hnsw (embedding vector_cosine_ops);
             """
         )
@@ -274,6 +290,7 @@ def _vector_literal(vector: list[float]) -> str:
 
 
 def _pgvector_upsert_sql(table_name: str) -> str:
+    table_name = _validate_pg_identifier(table_name, field_name="PG_TABLE")
     return f"""
         INSERT INTO {table_name} (
             chunk_id, doc_id, source_id, title, text, chunk_index, doc_type,
@@ -360,6 +377,8 @@ def make_pgvector_search_fn(
     other retrievers' scores.
     """
 
+    table_name = _validate_pg_identifier(table_name, field_name="PG_TABLE")
+
     def search_fn(vector: list[float], top_k: int) -> list[dict[str, Any]]:
         literal = _vector_literal(vector)
         sql = f"""
@@ -415,20 +434,35 @@ def build_service_adapters(
     if embeddings is None:
         embeddings = build_embeddings_provider(config.embedding)
 
-    es_client = create_elasticsearch_client(config)
-    conn = create_postgres_connection(config)
-    ensure_pgvector_schema(conn, config.postgres.table_name, config.embedding.dimension)
+    es_client = None
+    conn = None
+    try:
+        es_client = create_elasticsearch_client(config)
+        conn = create_postgres_connection(config)
+        ensure_pgvector_schema(conn, config.postgres.table_name, config.embedding.dimension)
 
-    keyword_adapter = ElasticsearchKeywordAdapter(
-        client=es_client, index_name=config.elasticsearch.index_name
-    )
-    vector_adapter = PgVectorAdapter(
-        search_fn=make_pgvector_search_fn(conn, config.postgres.table_name),
-        embed_query=embeddings.embed_query,
-    )
+        keyword_adapter = ElasticsearchKeywordAdapter(
+            client=es_client, index_name=config.elasticsearch.index_name
+        )
+        vector_adapter = PgVectorAdapter(
+            search_fn=make_pgvector_search_fn(conn, config.postgres.table_name),
+            embed_query=embeddings.embed_query,
+        )
 
-    # Fail-fast: both adapters must be present.
-    require_service_adapters(keyword=keyword_adapter, vector=vector_adapter)
+        # Fail-fast: both adapters must be present.
+        require_service_adapters(keyword=keyword_adapter, vector=vector_adapter)
+    except Exception:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if es_client is not None:
+            try:
+                es_client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        raise
 
     def _close() -> None:
         try:
@@ -508,27 +542,46 @@ def index_corpus_to_services(
     if embeddings is None:
         embeddings = build_embeddings_provider(config.embedding)
 
-    es_client = create_elasticsearch_client(config)
-    analyzers = ensure_elasticsearch_index(es_client, config.elasticsearch.index_name)
-    es_count = bulk_index_chunks(es_client, config.elasticsearch.index_name, chunks)
-
-    conn = create_postgres_connection(config)
-    ensure_pgvector_schema(conn, config.postgres.table_name, config.embedding.dimension)
     vectors = _embed_chunk_texts(chunks, embeddings)
-    rows = [
-        {**chunk_index_document(chunk), "embedding": vectors.get(chunk.chunk_id)}
-        for chunk in chunks
-    ]
-    pg_count = upsert_pgvector_rows(conn, config.postgres.table_name, rows)
+    if len(vectors) != len(chunks):
+        raise RuntimeError(
+            f"embedded {len(vectors)} chunks for {len(chunks)} input chunks"
+        )
+    for chunk in chunks:
+        vector = vectors.get(chunk.chunk_id)
+        if vector is None:
+            raise RuntimeError(f"missing embedding for chunk {chunk.chunk_id}")
+        if len(vector) != config.embedding.dimension:
+            raise RuntimeError(
+                f"chunk {chunk.chunk_id} embedding dimension {len(vector)} "
+                f"does not match configured dimension {config.embedding.dimension}"
+            )
 
+    es_client = None
+    conn = None
     try:
-        es_client.close()
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        conn.close()
-    except Exception:  # noqa: BLE001
-        pass
+        es_client = create_elasticsearch_client(config)
+        analyzers = ensure_elasticsearch_index(es_client, config.elasticsearch.index_name)
+
+        conn = create_postgres_connection(config)
+        ensure_pgvector_schema(conn, config.postgres.table_name, config.embedding.dimension)
+        rows = [
+            {**chunk_index_document(chunk), "embedding": vectors[chunk.chunk_id]}
+            for chunk in chunks
+        ]
+        pg_count = upsert_pgvector_rows(conn, config.postgres.table_name, rows)
+        es_count = bulk_index_chunks(es_client, config.elasticsearch.index_name, chunks)
+    finally:
+        if es_client is not None:
+            try:
+                es_client.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     return {
         "elasticsearch_index": config.elasticsearch.index_name,
@@ -544,21 +597,33 @@ def healthcheck(config: ServiceConfig) -> dict[str, Any]:
     """Probe ES and pgvector reachability for the gated integration test."""
 
     result: dict[str, Any] = {"elasticsearch": False, "postgres": False}
+    client = None
     try:
         client = create_elasticsearch_client(config)
         info = client.info()
         result["elasticsearch"] = bool(info.get("version", {}).get("number"))
-        client.close()
     except Exception as exc:  # noqa: BLE001
         result["elasticsearch_error"] = str(exc)
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
+    conn = None
     try:
         conn = create_postgres_connection(config)
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
-        conn.close()
         result["postgres"] = True
     except Exception as exc:  # noqa: BLE001
         result["postgres_error"] = str(exc)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
     return result
 
 

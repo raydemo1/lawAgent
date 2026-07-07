@@ -126,7 +126,7 @@ def _load_embedding_config() -> EmbeddingConfig:
         )
     return EmbeddingConfig(
         provider=provider,
-        base_url=os.getenv("EMBEDDING_BASE_URL", "https://api.openai.com").rstrip("/"),
+        base_url=os.getenv("EMBEDDING_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
         api_key=os.getenv("EMBEDDING_API_KEY") or None,
         model=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
         dimension=int(os.getenv("EMBEDDING_DIM", "1536")),
@@ -140,7 +140,7 @@ def load_service_config() -> ServiceConfig:
     load_env_file()
     es = ElasticsearchConfig(
         url=os.getenv("ES_URL", "http://localhost:9200").rstrip("/"),
-        index_name=os.getenv("ES_INDEX", "lawagent_chunks"),
+        index_name=os.getenv("ES_INDEX", os.getenv("ES_INDEX_NAME", "lawagent_chunks")),
         api_key=os.getenv("ES_API_KEY") or None,
         verify_certs=os.getenv("ES_VERIFY_CERTS", "true").lower() == "true",
     )

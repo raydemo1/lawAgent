@@ -256,6 +256,50 @@ def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
     assert "local" in data["mode_metrics"]
 
 
+def test_eval_run_accepts_modes_and_top_k(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /api/eval/run forwards explicit modes/top_k to the runner."""
+
+    captured = {}
+
+    def fake_run_evaluation(*, chunks_path, modes=None, top_k=10, **kwargs):
+        captured["chunks_path"] = chunks_path
+        captured["modes"] = modes
+        captured["top_k"] = top_k
+        from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
+
+        metrics = ModeMetrics(
+            mode="service",
+            mean_recall_at_3=0.5,
+            mean_recall_at_5=0.5,
+            mean_mrr_at_10=0.5,
+            abstention_accuracy=1.0,
+            second_retrieval_accuracy=1.0,
+            total_citation_violations=0,
+            bad_case_count=0,
+            total_cases=1,
+        )
+        return EvalSummary(
+            generated_at="2026-07-07T00:00:00+00:00",
+            chunks_path=str(chunks_path),
+            cases_path="default",
+            mode_metrics={"service": metrics},
+            bad_cases=[],
+            all_case_results={"service": []},
+        )
+
+    monkeypatch.setattr("law_agent.review.api.run_evaluation", fake_run_evaluation)
+
+    response = client.post("/api/eval/run", json={"modes": ["service"], "top_k": 7})
+
+    assert response.status_code == 200
+    assert captured["modes"] == ["service"]
+    assert captured["top_k"] == 7
+    assert "service" in response.json()["mode_metrics"]
+
+
 def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     """Two separate app instances must NOT share the eval cache.
 

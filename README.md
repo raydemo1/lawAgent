@@ -104,6 +104,7 @@ EMBEDDING_TIMEOUT_SECONDS=60
 
 # Elasticsearch
 ES_URL=http://localhost:9200
+ES_INDEX=lawagent_chunks
 ES_INDEX_NAME=lawagent_chunks
 
 # PostgreSQL + pgvector
@@ -225,7 +226,7 @@ EMBEDDING_DIM=1024
 
 ## 前端启动
 
-前端基于 React 19 + Vite 8 + TypeScript，通过 Vite dev server 代理 `/api` 请求到后端 FastAPI。
+前端基于 React 19 + Vite 8 + TypeScript，通过 Vite dev server 代理 `/api` 请求到后端 FastAPI。Vite 8 需要 Node `^20.19.0` 或 `>=22.12.0`。
 
 ### 1. 启动后端 API
 
@@ -233,9 +234,9 @@ EMBEDDING_DIM=1024
 # 确保已完成文件流水线（fetch → normalize → clean → enrich → chunk）
 # 确保 .env 已配置 LLM API key
 
-# 启动 FastAPI（端口 8000）
+# 启动 FastAPI（端口 8000），前端只使用真实 service 检索
 pip install uvicorn
-uvicorn law_agent.review.api:app --host 0.0.0.0 --port 8000 --reload
+python -m law_agent.review serve --host 0.0.0.0 --port 8000 --service
 ```
 
 后端启动后可访问：

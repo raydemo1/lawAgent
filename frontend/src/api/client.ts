@@ -15,8 +15,10 @@
  */
 
 import type {
+  EvalRunOptions,
   EvalSummary,
   HealthResponse,
+  ReviewApiResponse,
   ReviewResponse,
 } from '../types/api';
 
@@ -209,7 +211,7 @@ export async function submitReview(
   question: string,
   materialText: string,
   file?: File | null,
-): Promise<ReviewResponse> {
+): Promise<ReviewApiResponse> {
   if (!question || !question.trim()) {
     throw new ApiError(0, 'question must not be blank', '/api/review');
   }
@@ -296,10 +298,13 @@ export async function submitReview(
  * @returns           The freshly generated evaluation summary.
  * @throws {ApiError} On 400 (bad config) or 500 (server error).
  */
-export async function runEvaluation(): Promise<EvalSummary> {
+export async function runEvaluation(
+  options: EvalRunOptions = { modes: ['service'], top_k: 10 },
+): Promise<EvalSummary> {
   return request<EvalSummary>('/api/eval/run', {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(options),
+    timeoutMs: 900_000,
   });
 }
 

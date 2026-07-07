@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from law_agent.review.evalset.runner import run_evaluation
-from law_agent.review.evalset.schemas import EvalSummary
+from law_agent.review.evalset.schemas import EvalMode, EvalSummary
 from law_agent.review.io import read_review_results, read_retrieval_traces
 from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
@@ -41,6 +41,8 @@ from law_agent.review.service import (
     create_review_case,
     run_hybrid_retrieval,
 )
+
+RetrievalBackend = Literal["local", "service"]
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +78,11 @@ class EvalRunRequest(BaseModel):
     """Request body for POST /api/eval/run (all fields optional)."""
 
     chunks_path: str | None = Field(default=None, description="Custom path to chunks.jsonl")
+    modes: list[EvalMode] | None = Field(
+        default=None,
+        description="Eval modes to run, e.g. rule_baseline/local/service/llm",
+    )
+    top_k: int = Field(default=10, ge=1, le=100, description="Retrieval top_k")
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +94,7 @@ def create_app(
     *,
     chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
     review_mode: ReviewMode = "rule_baseline",
+    retrieval_backend: RetrievalBackend = "local",
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -113,6 +121,7 @@ def create_app(
     # Store config in app state
     app.state.chunks_path = Path(chunks_path)
     app.state.review_mode = review_mode
+    app.state.retrieval_backend = retrieval_backend
     # Per-app eval cache so two app instances never share eval results.
     app.state.eval_cache: dict[str, EvalSummary | None] = {"latest": None}
 
@@ -219,13 +228,24 @@ def create_app(
                 case_id = response.review_case.review_case_id
                 trace_id = response.trace.trace_id
 
-                # Run hybrid retrieval
-                trace = run_hybrid_retrieval(
-                    case_id=case_id,
-                    chunks_path=app.state.chunks_path,
-                    output_dir=tmp_path,
-                    review_mode=app.state.review_mode,
-                )
+                # Run retrieval. ``service`` is fail-fast and never falls back
+                # to the local vector mock.
+                if app.state.retrieval_backend == "service":
+                    from law_agent.review.service import run_service_retrieval
+
+                    trace = run_service_retrieval(
+                        case_id=case_id,
+                        chunks_path=app.state.chunks_path,
+                        output_dir=tmp_path,
+                        review_mode=app.state.review_mode,
+                    )
+                else:
+                    trace = run_hybrid_retrieval(
+                        case_id=case_id,
+                        chunks_path=app.state.chunks_path,
+                        output_dir=tmp_path,
+                        review_mode=app.state.review_mode,
+                    )
 
                 # Read the structured result
                 results = read_review_results(tmp_path / "review_results.jsonl")
@@ -285,7 +305,11 @@ def create_app(
         )
 
         try:
-            summary = run_evaluation(chunks_path=chunks)
+            summary = run_evaluation(
+                chunks_path=chunks,
+                modes=request.modes if request else None,
+                top_k=request.top_k if request else 10,
+            )
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as exc:

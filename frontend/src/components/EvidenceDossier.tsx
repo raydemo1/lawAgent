@@ -21,12 +21,13 @@ import type {
   CitationUsage,
   ClauseCitationRole,
   EvidenceStatus,
-  ReviewResponse,
+  ReviewApiResponse,
 } from '../types/api'
+import { isReviewFailedResponse } from '../types/api'
 
 interface EvidenceDossierProps {
   /** The most recent review response, or null before any review runs. */
-  reviewResponse: ReviewResponse | null
+  reviewResponse: ReviewApiResponse | null
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,28 @@ export default function EvidenceDossier({
             <div className="state-block__title">尚无研究记录</div>
             <div className="state-block__hint">
               提交一次研究请求后，将在此展示证据自检与可引用条文。
+            </div>
+          </div>
+        </div>
+      </aside>
+    )
+  }
+
+  if (isReviewFailedResponse(reviewResponse)) {
+    return (
+      <aside className="app-dossier dossier">
+        <div className="dossier-header">
+          <div className="dossier-title">证据档案</div>
+          <div className="dossier-subtitle">LLM 节点失败</div>
+        </div>
+        <div className="dossier-body">
+          <div className="state-block">
+            <div className="state-block__title">审查未完成</div>
+            <div className="state-block__hint">
+              {reviewResponse.failed_node}：{reviewResponse.message}
+              <br />
+              已重试 {reviewResponse.attempts} 次
+              {reviewResponse.trace_id ? ` · Trace ${reviewResponse.trace_id}` : ''}
             </div>
           </div>
         </div>

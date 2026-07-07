@@ -204,12 +204,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     from law_agent.review.api import create_app
 
-    app = create_app(chunks_path=Path(args.chunks), review_mode=args.mode)
+    app = create_app(
+        chunks_path=Path(args.chunks),
+        review_mode=args.mode,
+        retrieval_backend="service" if args.service else "local",
+    )
 
     print(f"Starting LawAgent Review API at http://{args.host}:{args.port}")
     print(f"  OpenAPI docs: http://{args.host}:{args.port}/docs")
     print(f"  Corpus: {args.chunks}")
     print(f"  Review mode: {args.mode}")
+    print(f"  Retrieval backend: {'service' if args.service else 'local'}")
     print("  Press Ctrl+C to stop")
 
     uvicorn.run(
@@ -384,6 +389,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["rule_baseline", "llm"],
         default="rule_baseline",
         help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
+    )
+    serve.add_argument(
+        "--service",
+        action="store_true",
+        help="Use real Elasticsearch + pgvector retrieval for /api/review.",
     )
     serve.set_defaults(func=_cmd_serve)
 
