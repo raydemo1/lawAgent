@@ -1,6 +1,6 @@
 """Tests for evaluation suite (Issue 9)."""
 
-from law_agent.review.evalset.cases import get_default_scenarios
+from law_agent.review.evalset.cases import get_default_scenarios, get_scenarios
 from law_agent.review.evalset.metrics import (
     aggregate_metrics,
     count_duplicate_sources_at_k,
@@ -60,6 +60,40 @@ def test_default_scenarios_includes_industry_cases() -> None:
     scenarios = get_default_scenarios()
     industry = [s for s in scenarios if "automotive" in s.tags or "industry" in s.tags]
     assert len(industry) >= 1
+
+
+def test_eval_suites_are_distinct_and_have_unique_case_ids() -> None:
+    quick = get_scenarios("quick")
+    base = get_scenarios("base")
+    full = get_scenarios("full")
+
+    assert 8 <= len(quick) <= 15
+    assert len(base) == 24
+    assert 80 <= len(full) <= 120
+    assert len({case.case_id for case in full}) == len(full)
+    assert {case.case_id for case in quick}.issubset(
+        {case.case_id for case in full}
+    )
+
+
+def test_full_suite_covers_required_domains() -> None:
+    scenarios = get_scenarios("full")
+    tags = {tag for scenario in scenarios for tag in scenario.tags}
+
+    required = {
+        "cross_border",
+        "standard_contract",
+        "certification",
+        "automotive",
+        "financial",
+        "regional",
+        "tc260",
+        "qna",
+        "abstention",
+        "out_of_corpus",
+        "conflict",
+    }
+    assert required <= tags
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +238,23 @@ def test_evaluate_case_low_recall_is_bad() -> None:
     assert result.recall_at_5 == 0.0
     assert result.is_bad_case is True
     assert "zero_recall_at_5" in result.bad_reasons
+    assert "retrieval_zero_recall" in result.bad_case_categories
+
+
+def test_evaluate_case_low_nonzero_recall_has_taxonomy() -> None:
+    scenario = EvalScenario(
+        case_id="test_low_recall",
+        question="问题",
+        material_text="材料",
+        expected_sources=["s1", "s2", "s3"],
+        min_recall_at_5=0.8,
+    )
+    hits = [_hit(source_id="s1", rank=0)]
+
+    result = evaluate_case(scenario, hits)
+
+    assert result.recall_at_5 == 0.3333
+    assert "retrieval_low_recall" in result.bad_case_categories
 
 
 def test_evaluate_case_records_candidate_and_source_diversity_metrics() -> None:
@@ -225,6 +276,22 @@ def test_evaluate_case_records_candidate_and_source_diversity_metrics() -> None:
     assert result.candidate_recall_at_50 == 1.0
     assert result.distinct_source_recall_at_5 == 0.5
     assert result.duplicate_source_count_at_10 == 1
+
+
+def test_evaluate_case_candidate_missing_has_taxonomy() -> None:
+    scenario = EvalScenario(
+        case_id="test_candidate_missing",
+        question="问题",
+        material_text="材料",
+        expected_sources=["s1", "s2"],
+        min_recall_at_5=0.75,
+    )
+    hits = [_hit(source_id="s1", rank=0)]
+    candidate_hits = [_hit(source_id="s1", rank=0)]
+
+    result = evaluate_case(scenario, hits, candidate_hits=candidate_hits)
+
+    assert "candidate_missing" in result.bad_case_categories
 
 
 def test_evaluate_case_abstention_correct() -> None:
@@ -258,6 +325,7 @@ def test_evaluate_case_abstention_incorrect() -> None:
     assert result.abstention_correct is False
     assert result.is_bad_case is True
     assert "abstention_incorrect" in result.bad_reasons
+    assert "abstention_error" in result.bad_case_categories
 
 
 def test_evaluate_case_second_retrieval_correct() -> None:
@@ -288,7 +356,8 @@ def test_evaluate_case_second_retrieval_incorrect() -> None:
     result = evaluate_case(scenario, hits, second_retrieval_triggered=False)
 
     assert result.second_retrieval_correct is False
-    assert "second_retrieval_incorrect" not in result.bad_reasons
+    assert "second_retrieval_incorrect" in result.bad_reasons
+    assert "second_retrieval_error" in result.bad_case_categories
 
 
 def test_evaluate_case_citation_violation_is_bad() -> None:
@@ -306,6 +375,7 @@ def test_evaluate_case_citation_violation_is_bad() -> None:
     assert result.citation_violation_count == 1
     assert result.is_bad_case is True
     assert any("citation_violations" in r for r in result.bad_reasons)
+    assert "citation_gate_error" in result.bad_case_categories
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +397,7 @@ def test_aggregate_metrics_calculates_means() -> None:
             duplicate_source_count_at_10=2,
             citation_violation_count=1, abstention_correct=False,
             second_retrieval_correct=False, is_bad_case=True,
-            bad_reasons=["test"],
+            bad_reasons=["test"], bad_case_categories=["abstention_error"],
         ),
     ]
 
@@ -344,6 +414,7 @@ def test_aggregate_metrics_calculates_means() -> None:
     assert metrics.second_retrieval_accuracy == 0.5
     assert metrics.total_citation_violations == 1
     assert metrics.bad_case_count == 1
+    assert metrics.bad_case_taxonomy == {"abstention_error": 1}
     assert metrics.total_cases == 2
 
 
@@ -398,6 +469,7 @@ def test_run_evaluation_with_fixture_corpus(tmp_path) -> None:
     key = "retrieval=local,review=local"
     assert key in summary.mode_metrics
     assert summary.mode_metrics[key].total_cases == 2
+    assert summary.cases_path == "custom"
 
 
 def test_format_summary_text_contains_key_metrics() -> None:

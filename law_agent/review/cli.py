@@ -173,6 +173,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     try:
         summary = run_evaluation(
             chunks_path=Path(args.chunks),
+            suite=args.suite,
             top_k=args.top_k,
             retrieval_mode=args.retrieval_mode,
             review_mode=args.review_mode,
@@ -359,6 +360,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to chunks.jsonl corpus file",
     )
     eval_parser.add_argument("--top-k", type=int, default=10)
+    eval_parser.add_argument(
+        "--suite",
+        choices=["quick", "base", "full"],
+        default="full",
+        help="Evaluation suite. quick is a small local smoke set; full is the complete golden set.",
+    )
     eval_parser.add_argument(
         "--max-workers",
         type=int,

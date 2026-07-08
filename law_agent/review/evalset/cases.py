@@ -1,6 +1,6 @@
-"""Default golden-set scenarios for review evaluation (Issue 9).
+"""Golden-set scenarios for review evaluation (Issue 9).
 
-24 scenario cases covering:
+Base scenario cases cover:
 - Cross-border data export assessment (5 cases)
 - Standard contract for personal info export (4 cases)
 - Smart connected vehicle / automotive (4 cases)
@@ -12,9 +12,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
+from law_agent.review.evalset.cases_full_extra import FULL_EXTRA_SCENARIOS
+from law_agent.review.evalset.cases_quick import QUICK_CASE_IDS
 from law_agent.review.evalset.schemas import EvalScenario
 
-DEFAULT_SCENARIOS: list[EvalScenario] = [
+EvalSuite = Literal["quick", "base", "full"]
+
+BASE_SCENARIOS: list[EvalScenario] = [
     # ------------------------------------------------------------------
     # Cross-border data export assessment
     # ------------------------------------------------------------------
@@ -430,6 +436,26 @@ DEFAULT_SCENARIOS: list[EvalScenario] = [
 
 
 def get_default_scenarios() -> list[EvalScenario]:
-    """Return the default golden-set scenarios."""
+    """Return the full golden-set scenarios."""
 
-    return list(DEFAULT_SCENARIOS)
+    return get_scenarios("full")
+
+
+def get_scenarios(suite: EvalSuite = "full") -> list[EvalScenario]:
+    """Return scenarios for a named evaluation suite."""
+
+    if suite == "base":
+        return list(BASE_SCENARIOS)
+    full = [*BASE_SCENARIOS, *FULL_EXTRA_SCENARIOS]
+    if suite == "full":
+        return full
+    if suite == "quick":
+        by_id = {scenario.case_id: scenario for scenario in full}
+        missing = [case_id for case_id in QUICK_CASE_IDS if case_id not in by_id]
+        if missing:
+            raise RuntimeError(f"quick suite references unknown cases: {missing}")
+        return [by_id[case_id] for case_id in QUICK_CASE_IDS]
+    raise RuntimeError(f"unsupported eval suite: {suite!r}")
+
+
+DEFAULT_SCENARIOS = get_default_scenarios()

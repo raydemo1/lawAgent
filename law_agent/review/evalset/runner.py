@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from law_agent.config import RerankMode
-from law_agent.review.evalset.cases import get_default_scenarios
+from law_agent.review.evalset.cases import EvalSuite, get_scenarios
 from law_agent.review.evalset.metrics import aggregate_metrics, evaluate_case
 from law_agent.review.evalset.schemas import (
     CaseMetricResult,
@@ -34,6 +34,7 @@ ReviewEvalMode = Literal["llm", "local"]
 DEFAULT_RETRIEVAL_MODE: RetrievalEvalMode = "service"
 DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
 DEFAULT_RERANK_MODE: RerankMode = "off"
+DEFAULT_EVAL_SUITE: EvalSuite = "full"
 DEFAULT_MAX_WORKERS = 4
 
 
@@ -41,6 +42,7 @@ def run_evaluation(
     *,
     chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
     scenarios: list[EvalScenario] | None = None,
+    suite: EvalSuite = DEFAULT_EVAL_SUITE,
     top_k: int = 10,
     retrieval_mode: RetrievalEvalMode = DEFAULT_RETRIEVAL_MODE,
     review_mode: ReviewEvalMode = DEFAULT_REVIEW_MODE,
@@ -52,8 +54,9 @@ def run_evaluation(
     Returns an ``EvalSummary`` with per-mode aggregated metrics and bad cases.
     """
 
+    cases_label = suite if scenarios is None else "custom"
     if scenarios is None:
-        scenarios = get_default_scenarios()
+        scenarios = get_scenarios(suite)
 
     generated_at = utc_now_iso()
 
@@ -113,7 +116,7 @@ def run_evaluation(
     return EvalSummary(
         generated_at=generated_at,
         chunks_path=str(chunks_path),
-        cases_path="default",
+        cases_path=cases_label,
         mode_metrics=mode_metrics,
         bad_cases=all_bad,
         all_case_results=results_by_mode,
@@ -253,6 +256,12 @@ def format_summary_text(summary: EvalSummary) -> str:
         lines.append(f"  Second retrieval:   {metrics.second_retrieval_accuracy:.4f}")
         lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
+        if metrics.bad_case_taxonomy:
+            taxonomy = ", ".join(
+                f"{category}={count}"
+                for category, count in metrics.bad_case_taxonomy.items()
+            )
+            lines.append(f"  Bad taxonomy:       {taxonomy}")
 
     if summary.bad_cases:
         lines.append(f"\n--- Bad cases ({len(summary.bad_cases)}) ---")
@@ -262,7 +271,12 @@ def format_summary_text(summary: EvalSummary) -> str:
             if key in seen:
                 continue
             seen.add(key)
-            lines.append(f"  {case.case_id}: {case.bad_reasons}")
+            categories = (
+                f" categories={case.bad_case_categories}"
+                if case.bad_case_categories
+                else ""
+            )
+            lines.append(f"  {case.case_id}: {case.bad_reasons}{categories}")
             if case.missing_sources:
                 lines.append(f"    missing: {case.missing_sources}")
 

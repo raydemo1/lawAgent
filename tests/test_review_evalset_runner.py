@@ -93,6 +93,53 @@ def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypa
     assert captured[0] is not None
 
 
+def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Runner should select the requested suite before executing cases."""
+
+    chunks_path = _write_fixture_corpus(tmp_path)
+    captured = []
+
+    def fake_run_single_case(
+        scenario,
+        chunks_path,
+        *,
+        retrieval_mode,
+        review_mode,
+        top_k,
+        rerank_mode="off",
+        service_adapters=None,
+        service_config=None,
+    ):
+        captured.append(scenario.case_id)
+        from law_agent.review.evalset.schemas import CaseMetricResult
+
+        return CaseMetricResult(
+            case_id=scenario.case_id,
+            recall_at_3=1.0,
+            recall_at_5=1.0,
+            mrr_at_10=1.0,
+            citation_violation_count=0,
+            abstention_correct=True,
+            second_retrieval_correct=True,
+        )
+
+    monkeypatch.setattr(runner_module, "_run_single_case", fake_run_single_case)
+
+    summary = run_evaluation(
+        chunks_path=chunks_path,
+        suite="quick",
+        retrieval_mode="local",
+        review_mode="local",
+    )
+
+    assert summary.cases_path == "quick"
+    assert len(captured) == 12
+    assert summary.mode_metrics["retrieval=local,review=local"].total_cases == 12
+
+
 def test_service_eval_mode_fails_fast_without_service_backend(tmp_path: Path) -> None:
     """service mode must not silently fall back to local retrieval.
 

@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from law_agent.review.schemas import StrictModel
+
+BadCaseCategory = Literal[
+    "retrieval_zero_recall",
+    "retrieval_low_recall",
+    "candidate_missing",
+    "abstention_error",
+    "second_retrieval_error",
+    "citation_gate_error",
+]
 
 # ---------------------------------------------------------------------------
 # Golden set case schema
@@ -26,6 +37,10 @@ class EvalScenario(StrictModel):
     )
     should_trigger_second_retrieval: bool = False
     should_abstain: bool = False
+    min_recall_at_5: float = Field(
+        default=0.5,
+        description="Minimum Recall@5 before a non-abstention case is considered bad.",
+    )
     must_not_cite_as_clause: list[str] = Field(
         default_factory=list,
         description="chunk_id values that must NOT appear as can_cite_clause=True",
@@ -54,6 +69,7 @@ class CaseMetricResult(StrictModel):
     missing_sources: list[str] = Field(default_factory=list)
     is_bad_case: bool = False
     bad_reasons: list[str] = Field(default_factory=list)
+    bad_case_categories: list[BadCaseCategory] = Field(default_factory=list)
     risk_level: str = ""
 
 
@@ -75,6 +91,7 @@ class ModeMetrics(StrictModel):
     second_retrieval_accuracy: float
     total_citation_violations: int
     bad_case_count: int
+    bad_case_taxonomy: dict[str, int] = Field(default_factory=dict)
     total_cases: int
 
 

@@ -10,7 +10,13 @@ Metrics:
 
 from __future__ import annotations
 
-from law_agent.review.evalset.schemas import CaseMetricResult, EvalScenario
+from collections import Counter
+
+from law_agent.review.evalset.schemas import (
+    BadCaseCategory,
+    CaseMetricResult,
+    EvalScenario,
+)
 from law_agent.review.schemas import Citation, CitationGroup, RetrievalHit
 
 
@@ -168,7 +174,7 @@ def evaluate_case(
     recall_3, missing_3 = compute_recall_at_k(hits, scenario.expected_sources, 3)
     recall_5, missing_5 = compute_recall_at_k(hits, scenario.expected_sources, 5)
     mrr = compute_mrr_at_k(hits, scenario.expected_sources, 10)
-    candidate_recall_50, _candidate_missing = compute_source_pool_recall(
+    candidate_recall_50, candidate_missing = compute_source_pool_recall(
         candidate_hits if candidate_hits is not None else hits,
         scenario.expected_sources,
     )
@@ -204,14 +210,37 @@ def evaluate_case(
         second_retrieval_triggered == scenario.should_trigger_second_retrieval
     )
 
-    # Determine bad case
+    # Determine bad case taxonomy.
     bad_reasons: list[str] = []
+    bad_categories: list[BadCaseCategory] = []
     if scenario.expected_sources and recall_5 == 0.0 and not scenario.should_abstain:
         bad_reasons.append("zero_recall_at_5")
+        bad_categories.append("retrieval_zero_recall")
+    elif (
+        scenario.expected_sources
+        and recall_5 < scenario.min_recall_at_5
+        and not scenario.should_abstain
+    ):
+        bad_reasons.append(
+            f"low_recall_at_5={recall_5:.4f}<min={scenario.min_recall_at_5:.4f}"
+        )
+        bad_categories.append("retrieval_low_recall")
+    if (
+        scenario.expected_sources
+        and candidate_recall_50 < scenario.min_recall_at_5
+        and not scenario.should_abstain
+    ):
+        bad_reasons.append(f"candidate_missing={candidate_missing}")
+        bad_categories.append("candidate_missing")
     if not abstention_correct:
         bad_reasons.append("abstention_incorrect")
+        bad_categories.append("abstention_error")
+    if not second_retrieval_correct:
+        bad_reasons.append("second_retrieval_incorrect")
+        bad_categories.append("second_retrieval_error")
     if citation_violations > 0:
         bad_reasons.append(f"citation_violations={citation_violations}")
+        bad_categories.append("citation_gate_error")
 
     return CaseMetricResult(
         case_id=scenario.case_id,
@@ -228,6 +257,7 @@ def evaluate_case(
         missing_sources=missing_5,
         is_bad_case=len(bad_reasons) > 0,
         bad_reasons=bad_reasons,
+        bad_case_categories=bad_categories,
         risk_level=risk_level,
     )
 
@@ -254,6 +284,7 @@ def aggregate_metrics(
             second_retrieval_accuracy=0.0,
             total_citation_violations=0,
             bad_case_count=0,
+            bad_case_taxonomy={},
             total_cases=0,
         )
 
@@ -275,6 +306,11 @@ def aggregate_metrics(
 
     total_violations = sum(c.citation_violation_count for c in case_results)
     bad_count = sum(1 for c in case_results if c.is_bad_case)
+    taxonomy = Counter(
+        category
+        for case in case_results
+        for category in case.bad_case_categories
+    )
 
     return ModeMetrics(
         mode=mode,
@@ -288,5 +324,6 @@ def aggregate_metrics(
         second_retrieval_accuracy=round(second_retrieval_correct / total, 4),
         total_citation_violations=total_violations,
         bad_case_count=bad_count,
+        bad_case_taxonomy=dict(sorted(taxonomy.items())),
         total_cases=total,
     )
