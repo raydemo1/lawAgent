@@ -1,8 +1,8 @@
 # LawAgent
 
-LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目。
+LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。
 
-第一阶段优先建设数据治理底座：数据源 manifest、统一文档格式、规则清洗、语义增强、结构化分块和评测数据准备。
+项目文档只保留长期维护入口：本文件记录日常开发、运行和项目流程；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言；[docs/data-governance-design.md](docs/data-governance-design.md) 记录数据治理设计；[docs/adr](docs/adr) 记录稳定架构决策。
 
 ## 开发命令
 
@@ -10,6 +10,17 @@ LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目。
 python -m law_agent.data --help
 pytest
 ```
+
+## 项目结构
+
+| 路径 | 用途 |
+|---|---|
+| `law_agent/data/` | manifest、fetch、normalize、clean、enrich、chunk、数据 evalset 流水线 |
+| `law_agent/review/` | 材料驱动审查、混合检索、证据自检、评测和 FastAPI |
+| `frontend/` | React + Vite 单用户合规研究工作台 |
+| `data/corpus/legal_docs_20260702/` | 当前 review 语料包，本地生成数据，默认被 git 忽略 |
+| `data/models/docling/` | Docling/RapidOCR 本地模型缓存，默认被 git 忽略 |
+| `data/review_runs/` | 本地 review case、trace、result 输出，默认被 git 忽略 |
 
 ## 模型配置
 
@@ -71,7 +82,7 @@ FLK 采集链路使用国家法律法规数据库官方接口：
 
 ## Service Stack（Elasticsearch + pgvector）
 
-文件流水线产出的 chunks 可索引到 Elasticsearch + pgvector，实现真实混合检索（关键词 + 向量 RRF 融合）。
+`data/corpus/legal_docs_20260702/chunks.jsonl` 可索引到 Elasticsearch + pgvector，实现真实混合检索（关键词 + 向量 RRF 融合）。
 
 ### 前置条件
 
@@ -173,7 +184,7 @@ python -m law_agent.review service-doctor
 
 ### 5. 索引语料
 
-确保已完成文件流水线（fetch → normalize → clean → enrich → chunk），生成 `chunks.jsonl` 后索引：
+确保 `data/corpus/legal_docs_20260702/chunks.jsonl` 存在后索引：
 
 ```powershell
 python -m law_agent.review index-service --execute
@@ -189,19 +200,19 @@ python -m law_agent.review index-service --execute
 python -m law_agent.review run `
   --question "这个场景是否需要数据出境安全评估？" `
   --material-text "我们会将手机号和定位信息发送给新加坡服务商用于推荐优化。" `
-  --output-dir artifacts/review
+  --output-dir data/review_runs
 ```
 
 然后用 service 模式检索：
 
 ```powershell
 # 从 review_cases.jsonl 获取 case_id
-$caseId = (Get-Content artifacts/review/review_cases.jsonl | ConvertFrom-Json)[0].review_case_id
+$caseId = (Get-Content data/review_runs/review_cases.jsonl | ConvertFrom-Json)[0].review_case_id
 
 python -m law_agent.review retrieve `
   --case-id $caseId `
   --service `
-  --output-dir artifacts/review `
+  --output-dir data/review_runs `
   --top-k 5
 ```
 
@@ -247,7 +258,7 @@ EMBEDDING_DIM=1024
 ### 1. 启动后端 API
 
 ```powershell
-# 确保已完成文件流水线（fetch → normalize → clean → enrich → chunk）
+# 确保 data/corpus/legal_docs_20260702/chunks.jsonl 已准备并完成 service 索引
 # 确保 .env 已配置 LLM API key
 
 # 启动 FastAPI（端口 8000），前端只使用真实 service 检索
@@ -299,7 +310,7 @@ npm run build
 ```powershell
 python -m law_agent.data normalize --parser auto
 python -m law_agent.data normalize --parser docling
-python -m law_agent.data normalize --parser mineru --parser-output-dir artifacts/parser/mineru
+python -m law_agent.data normalize --parser mineru --parser-output-dir data/parser/mineru
 ```
 
 Docling 和 MinerU 是可选重依赖，按需要安装：
@@ -311,10 +322,10 @@ pip install -e ".[mineru]"
 pip install -e ".[parsers]"
 ```
 
-如果本地 `artifacts/models/docling` 目录缺 RapidOCR 模型，流水线会让 Docling 回到默认模型缓存，避免卡在残缺目录上。要强制使用某个完整模型目录，可以设置：
+如果本地 `data/models/docling` 目录缺 RapidOCR 模型，流水线会让 Docling 回到默认模型缓存，避免卡在残缺目录上。要强制使用某个完整模型目录，可以设置：
 
 ```powershell
-$env:LAWAGENT_DOCLING_ARTIFACTS_PATH="artifacts/models/docling"
+$env:LAWAGENT_DOCLING_ARTIFACTS_PATH="data/models/docling"
 ```
 
 远程 OCR API 需要兼容 Docling 的 KServe v2 OCR 输入输出：输入包含 `image` 和 `lang_type`，输出包含 `boxes`、`txts`、`scores`。配置示例：
@@ -338,4 +349,4 @@ python -m law_agent.data normalize --parser docling
 
 ## 当前范围
 
-第一阶段已实现 JSONL 文件流水线，并已完成 Elasticsearch + pgvector 服务接入，支持真实混合检索。
+当前实现已包含 JSONL 数据治理流水线、Elasticsearch + pgvector 真实混合检索、材料驱动审查 API、Review eval full/quick 评测集和前端工作台。

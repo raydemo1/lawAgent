@@ -12,7 +12,7 @@ from law_agent.data.io import read_jsonl
 from law_agent.data.schemas import Chunk
 
 DEFAULT_CHUNKS_PATH = Path(
-    "artifacts/review/legal_docs_20260702/chunks.jsonl"
+    "data/corpus/legal_docs_20260702/chunks.jsonl"
 )
 
 

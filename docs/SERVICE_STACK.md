@@ -14,6 +14,16 @@
 
 > 账号密码均为 `lawagent`，仅供本地开发，请勿用于生产。
 
+## 默认语料路径
+
+服务索引默认读取：
+
+```text
+data/corpus/legal_docs_20260702/chunks.jsonl
+```
+
+该目录是本地生成数据，默认被 git 忽略；如需切换语料，可在 `law_agent.review` 相关命令中传入 `--chunks`。
+
 ## 启动服务
 
 在 `docker-compose.yml` 所在目录执行：

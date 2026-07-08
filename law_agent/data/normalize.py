@@ -29,7 +29,7 @@ CELL_CLOSE_RE = re.compile(r"</(td|th)\s*>", re.IGNORECASE)
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 ParserEngine = Literal["auto", "plain", "docx", "docling", "mineru"]
 DOC_PARSER_FORMATS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
-DEFAULT_DOCLING_ARTIFACTS_PATH = Path("artifacts/models/docling")
+DEFAULT_DOCLING_ARTIFACTS_PATH = Path("data/models/docling")
 
 
 def _html_to_text(raw: str) -> str:

@@ -64,7 +64,7 @@ from law_agent.review.schemas import (
     RetrievalTrace,
 )
 
-DEFAULT_REVIEW_RUNS_DIR = Path("artifacts/review_runs")
+DEFAULT_REVIEW_RUNS_DIR = Path("data/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_TOP_K = 50
