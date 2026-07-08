@@ -197,7 +197,7 @@ def test_standard_contract_question_adds_targeted_query() -> None:
     assert any("标准合同" in query.text and "备案指南" in query.text for query in queries)
 
 
-def test_cross_border_personal_info_filing_adds_standard_contract_query() -> None:
+def test_cross_border_personal_info_filing_does_not_infer_standard_contract_query() -> None:
     material = (
         "集团要把境内员工姓名、手机号、邮箱同步到德国 HR 系统，"
         "全年涉及员工约3000人，已在员工告知书里说明用途。"
@@ -205,7 +205,7 @@ def test_cross_border_personal_info_filing_adds_standard_contract_query() -> Non
     facts = extract_facts(material)
     queries = plan_queries("海外 HR 系统同步员工通讯录，应该准备哪类文件和备案？", facts, material)
 
-    assert any("标准合同" in query.text and "备案指南" in query.text for query in queries)
+    assert not any("标准合同" in query.text and "备案指南" in query.text for query in queries)
 
 
 def test_standard_contract_filing_query_requires_cross_border_context() -> None:

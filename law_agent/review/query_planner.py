@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import NamedTuple
 
 from pydantic import Field, field_validator
 
@@ -60,22 +61,6 @@ _STANDARD_CONTRACT_TERMS: tuple[str, ...] = (
     "合同方式",
 )
 
-_STANDARD_CONTRACT_FILING_TERMS: tuple[str, ...] = (
-    "备案",
-    "备案材料",
-    "备案包",
-    "哪类文件",
-    "准备哪些文件",
-    "准备哪类文件",
-)
-
-_STANDARD_CONTRACT_IMPLICIT_CONTEXT_TERMS: tuple[str, ...] = (
-    "员工",
-    "HR",
-    "人力资源",
-    "通讯录",
-)
-
 _ASSESSMENT_INTENT_TERMS: tuple[str, ...] = (
     "安全评估",
     "申报",
@@ -89,6 +74,28 @@ _ASSESSMENT_INTENT_TERMS: tuple[str, ...] = (
     "规模",
     "万人",
     "百万",
+)
+
+
+class _LegalQueryTemplate(NamedTuple):
+    """Controlled legal terminology expansion template."""
+
+    intent_terms: tuple[str, ...]
+    query_text: str
+    requires_cross_border: bool = False
+
+
+_LEGAL_QUERY_TEMPLATES: tuple[_LegalQueryTemplate, ...] = (
+    _LegalQueryTemplate(
+        intent_terms=_ASSESSMENT_INTENT_TERMS,
+        query_text="数据出境安全评估 申报条件 重要数据 个人信息 100万人 10万人",
+        requires_cross_border=True,
+    ),
+    _LegalQueryTemplate(
+        intent_terms=_STANDARD_CONTRACT_TERMS,
+        query_text="个人信息出境 标准合同 办法 备案指南 备案材料",
+        requires_cross_border=False,
+    ),
 )
 
 
@@ -170,42 +177,25 @@ def _build_industry_query(
     )
 
 
-def _build_standard_contract_query(
-    question: str,
-    facts: ReviewFacts,
-    material_text: str | None,
-    ids: _QueryIdGenerator,
-) -> RetrievalQuery | None:
-    combined = f"{question}\n{material_text or ''}"
-    explicit_contract = _contains_any(combined, _STANDARD_CONTRACT_TERMS)
-    filing_for_cross_border_personal_info = (
-        bool(facts.cross_border_transfer)
-        and _contains_any(combined, _STANDARD_CONTRACT_FILING_TERMS)
-        and _contains_any(combined, _STANDARD_CONTRACT_IMPLICIT_CONTEXT_TERMS)
-    )
-    if not (explicit_contract or filing_for_cross_border_personal_info):
-        return None
-    return RetrievalQuery(
-        query_id=ids.next_id(),
-        query_type="legal_issue",
-        text="个人信息出境 标准合同 办法 备案指南 备案材料",
-    )
-
-
-def _build_assessment_query(
+def _build_template_queries(
     facts: ReviewFacts,
     ids: _QueryIdGenerator,
     context_text: str,
-) -> RetrievalQuery | None:
-    if not facts.cross_border_transfer:
-        return None
-    if not _contains_any(context_text, _ASSESSMENT_INTENT_TERMS):
-        return None
-    return RetrievalQuery(
-        query_id=ids.next_id(),
-        query_type="legal_issue",
-        text="数据出境安全评估 申报条件 重要数据 个人信息 100万人 10万人",
-    )
+) -> list[RetrievalQuery]:
+    queries: list[RetrievalQuery] = []
+    for template in _LEGAL_QUERY_TEMPLATES:
+        if template.requires_cross_border and not facts.cross_border_transfer:
+            continue
+        if not _contains_any(context_text, template.intent_terms):
+            continue
+        queries.append(
+            RetrievalQuery(
+                query_id=ids.next_id(),
+                query_type="legal_issue",
+                text=template.query_text,
+            )
+        )
+    return queries
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -275,15 +265,7 @@ def plan_queries(
     if industry_query is not None:
         queries.append(industry_query)
 
-    assessment_query = _build_assessment_query(facts, ids, context_text)
-    if assessment_query is not None:
-        queries.append(assessment_query)
-
-    standard_contract_query = _build_standard_contract_query(
-        question, facts, material_text, ids
-    )
-    if standard_contract_query is not None:
-        queries.append(standard_contract_query)
+    queries.extend(_build_template_queries(facts, ids, context_text))
 
     queries.extend(_build_missing_information_queries(facts, ids))
 
@@ -314,15 +296,7 @@ def plan_high_confidence_queries(
     if industry_query is not None:
         queries.append(industry_query)
 
-    assessment_query = _build_assessment_query(facts, ids, context_text)
-    if assessment_query is not None:
-        queries.append(assessment_query)
-
-    standard_contract_query = _build_standard_contract_query(
-        question, facts, material_text, ids
-    )
-    if standard_contract_query is not None:
-        queries.append(standard_contract_query)
+    queries.extend(_build_template_queries(facts, ids, context_text))
 
     return queries
 
