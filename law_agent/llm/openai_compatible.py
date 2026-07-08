@@ -7,12 +7,12 @@ file pipeline can run with only the standard library plus pydantic.
 from __future__ import annotations
 
 import json
-import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+import json_repair
 from pydantic import BaseModel
 
 from law_agent.config import LLMConfig
@@ -146,27 +146,18 @@ def _schema_for_strict_tool(model: type[BaseModel]) -> dict[str, Any]:
     return _strip_unsupported_schema_keys(schema)
 
 
-_BARE_JSON_TOKEN_RE = re.compile(
-    r'(:\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*[,}])'
-)
-_JSON_LITERALS = {"true", "false", "null"}
-
-
 def _loads_tool_arguments(arguments: str) -> dict:
     try:
-        return json.loads(arguments)
+        parsed = json.loads(arguments)
     except json.JSONDecodeError:
-        repaired = _BARE_JSON_TOKEN_RE.sub(_quote_bare_json_token, arguments)
-        if repaired == arguments:
-            raise
-        return json.loads(repaired)
-
-
-def _quote_bare_json_token(match: re.Match[str]) -> str:
-    prefix, token, suffix = match.groups()
-    if token.lower() in _JSON_LITERALS:
-        return match.group(0)
-    return f'{prefix}"{token}"{suffix}'
+        parsed = json_repair.loads(arguments)
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError(
+            "tool arguments must decode to a JSON object",
+            arguments,
+            0,
+        )
+    return parsed
 
 
 def _inline_local_refs(value: Any, definitions: dict[str, Any]) -> Any:

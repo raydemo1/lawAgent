@@ -122,10 +122,10 @@ def test_structured_node_retries_validation_failure() -> None:
     assert "validation_errors=" in client.calls[1][-1].content
 
 
-def test_strict_tool_argument_loader_repairs_bare_string_tokens() -> None:
+def test_strict_tool_argument_loader_repairs_malformed_json() -> None:
     payload = (
         '{"region": CN, "cross_border_transfer": true, '
-        '"industry": null, "missing_information": []}'
+        '"industry": null, "missing_information": []} trailing text'
     )
 
     parsed = _loads_tool_arguments(payload)
@@ -133,6 +133,11 @@ def test_strict_tool_argument_loader_repairs_bare_string_tokens() -> None:
     assert parsed["region"] == "CN"
     assert parsed["cross_border_transfer"] is True
     assert parsed["industry"] is None
+
+
+def test_strict_tool_argument_loader_requires_json_object() -> None:
+    with pytest.raises(ValueError):
+        _loads_tool_arguments("[1, 2, 3]")
 
 
 def test_structured_node_uses_per_node_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
