@@ -32,9 +32,8 @@ _REGION_INTENT_TERMS: tuple[str, ...] = (
     "管理清单",
     "地方政策",
     "区域政策",
-    "数据出境",
-    "跨境",
-    "出境",
+    "地方清单",
+    "地方规则",
 )
 
 _INDUSTRY_INTENT_TERMS: tuple[str, ...] = (
@@ -61,11 +60,16 @@ _STANDARD_CONTRACT_TERMS: tuple[str, ...] = (
     "合同方式",
 )
 
-_ASSESSMENT_INTENT_TERMS: tuple[str, ...] = (
+_ASSESSMENT_STRONG_INTENT_TERMS: tuple[str, ...] = (
     "安全评估",
+    "数据出境安全评估",
+    "申报数据出境安全评估",
+    "网信部门申报",
+    "网信办申报",
+)
+
+_ASSESSMENT_WEAK_INTENT_TERMS: tuple[str, ...] = (
     "申报",
-    "网信办",
-    "网信部门",
     "必须走",
     "一定要走",
     "什么情况下",
@@ -76,6 +80,15 @@ _ASSESSMENT_INTENT_TERMS: tuple[str, ...] = (
     "百万",
 )
 
+_ASSESSMENT_ANCHOR_TERMS: tuple[str, ...] = (
+    "评估",
+    "网信办",
+    "网信部门",
+    "重要数据",
+    "100万人",
+    "10万人",
+)
+
 
 class _LegalQueryTemplate(NamedTuple):
     """Controlled legal terminology expansion template."""
@@ -83,13 +96,20 @@ class _LegalQueryTemplate(NamedTuple):
     intent_terms: tuple[str, ...]
     query_text: str
     requires_cross_border: bool = False
+    anchor_terms: tuple[str, ...] = ()
 
 
 _LEGAL_QUERY_TEMPLATES: tuple[_LegalQueryTemplate, ...] = (
     _LegalQueryTemplate(
-        intent_terms=_ASSESSMENT_INTENT_TERMS,
+        intent_terms=_ASSESSMENT_STRONG_INTENT_TERMS,
         query_text="数据出境安全评估 申报条件 重要数据 个人信息 100万人 10万人",
         requires_cross_border=True,
+    ),
+    _LegalQueryTemplate(
+        intent_terms=_ASSESSMENT_WEAK_INTENT_TERMS,
+        query_text="数据出境安全评估 申报条件 重要数据 个人信息 100万人 10万人",
+        requires_cross_border=True,
+        anchor_terms=_ASSESSMENT_ANCHOR_TERMS,
     ),
     _LegalQueryTemplate(
         intent_terms=_STANDARD_CONTRACT_TERMS,
@@ -183,11 +203,17 @@ def _build_template_queries(
     context_text: str,
 ) -> list[RetrievalQuery]:
     queries: list[RetrievalQuery] = []
+    seen_texts: set[str] = set()
     for template in _LEGAL_QUERY_TEMPLATES:
         if template.requires_cross_border and not facts.cross_border_transfer:
             continue
         if not _contains_any(context_text, template.intent_terms):
             continue
+        if template.anchor_terms and not _contains_any(context_text, template.anchor_terms):
+            continue
+        if template.query_text in seen_texts:
+            continue
+        seen_texts.add(template.query_text)
         queries.append(
             RetrievalQuery(
                 query_id=ids.next_id(),

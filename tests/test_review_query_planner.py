@@ -102,6 +102,13 @@ def test_region_query_requires_explicit_regional_intent() -> None:
     assert "region_condition" not in _query_types(queries)
 
 
+def test_region_query_does_not_trigger_for_plain_cross_border_region() -> None:
+    facts = ReviewFacts(region="北京", cross_border_transfer=True)
+    queries = plan_queries("数据出境需要注意什么？", facts, "公司在北京开展业务。")
+
+    assert "region_condition" not in _query_types(queries)
+
+
 def test_region_query_does_not_treat_cn_as_local_region() -> None:
     facts = ReviewFacts(region="CN", cross_border_transfer=True)
     queries = plan_queries("数据出境后续义务？", facts, "数据传输至日本分析中心。")
@@ -244,6 +251,21 @@ def test_cross_border_assessment_intent_adds_threshold_query() -> None:
     )
 
     assert any("数据出境安全评估" in query.text and "申报条件" in query.text for query in queries)
+
+
+def test_cross_border_assessment_template_requires_anchor_for_weak_terms() -> None:
+    facts = ReviewFacts(
+        cross_border_transfer=True,
+        data_types=["个人信息"],
+        overseas_recipient="美国",
+    )
+    queries = plan_queries(
+        "跨境业务备案材料怎么准备？",
+        facts,
+        "公司计划向美国合作方提供少量客户信息。",
+    )
+
+    assert not any("数据出境安全评估" in query.text for query in queries)
 
 
 def test_high_confidence_queries_exclude_missing_information_noise() -> None:
