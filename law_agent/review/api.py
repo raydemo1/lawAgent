@@ -183,6 +183,48 @@ class EvalJobResponse(BaseModel):
     finished_at: str | None = None
 
 
+def _idle_job() -> dict[str, Any]:
+    return {
+        "job_id": None,
+        "status": "idle",
+        "message": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+def _preload_eval_cache(app: FastAPI, cache_dir: Path) -> None:
+    """Load the most recent ``rerank=off`` and ``rerank=on`` eval summaries
+    from ``cache_dir`` into ``app.state.eval_cache``.
+
+    Filenames must contain ``rerank_off`` / ``rerank_on`` (or ``rerank=off`` /
+    ``rerank=on``) to be recognized. The most recent file per arm wins.
+    """
+    import glob
+
+    if not cache_dir.exists():
+        return
+
+    patterns = {
+        "off": ["*rerank_off*", "*rerank=off*", "*rerank-off*"],
+        "embedding": ["*rerank_on*", "*rerank=on*", "*rerank-on*"],
+    }
+    for arm, pats in patterns.items():
+        candidates: list[Path] = []
+        for pat in pats:
+            candidates.extend(Path(p) for p in glob.glob(str(cache_dir / pat)))
+        if not candidates:
+            continue
+        # Pick the most recently modified file.
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        try:
+            summary = EvalSummary.model_validate_json(latest.read_text(encoding="utf-8"))
+            app.state.eval_cache[arm] = summary
+        except Exception:
+            # Don't fail startup over a stale cache file.
+            pass
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -193,11 +235,17 @@ def create_app(
     chunks_path: Path | str = DEFAULT_CHUNKS_PATH,
     review_mode: ReviewMode = "rule_baseline",
     retrieval_backend: RetrievalBackend = "local",
+    eval_cache_dir: Path | str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         chunks_path: Path to the corpus chunks.jsonl file.
+        eval_cache_dir: Optional directory with ``eval_full_rerank_off_*.json``
+            and ``eval_full_rerank_on_*.json`` files to pre-populate the eval
+            cache on startup so the dashboard can show results without a
+            fresh run. Files are matched by ``rerank=off`` / ``rerank=on``
+            in the filename.
     """
 
     app = FastAPI(
@@ -221,15 +269,20 @@ def create_app(
     app.state.review_mode = review_mode
     app.state.retrieval_backend = retrieval_backend
     # Per-app eval cache so two app instances never share eval results.
-    app.state.eval_cache: dict[str, EvalSummary | None] = {"latest": None}
-    app.state.eval_job: dict[str, Any] = {
-        "job_id": None,
-        "status": "idle",
-        "message": None,
-        "started_at": None,
-        "finished_at": None,
+    # Cache is keyed by rerank_mode ("off" / "embedding") so both arms of an
+    # A/B eval can coexist without overwriting each other.
+    app.state.eval_cache: dict[str, EvalSummary | None] = {"off": None, "embedding": None}
+    # eval_jobs is also keyed by rerank_mode so the two arms can run independently.
+    app.state.eval_jobs: dict[str, dict[str, Any]] = {
+        "off": _idle_job(),
+        "embedding": _idle_job(),
     }
     app.state.eval_lock = threading.Lock()
+
+    # Pre-populate eval cache from disk so the dashboard can display the
+    # latest A/B results without waiting for a fresh run.
+    if eval_cache_dir is not None:
+        _preload_eval_cache(app, Path(eval_cache_dir))
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -453,23 +506,29 @@ def create_app(
                 )
 
     @app.get("/api/eval/latest")
-    async def get_latest_eval() -> JSONResponse:
-        """Get the latest cached evaluation summary.
+    async def get_latest_eval(rerank_mode: RerankMode = "off") -> JSONResponse:
+        """Get the latest cached evaluation summary for the given rerank arm.
 
-        Returns 404 if no evaluation has been run yet.
+        Returns 404 if no evaluation has been run for this rerank_mode yet.
         """
 
-        cached = app.state.eval_cache.get("latest")
+        cached = app.state.eval_cache.get(rerank_mode)
         if cached is None:
             raise HTTPException(
                 status_code=404,
-                detail="no evaluation has been run yet. POST /api/eval/run to trigger one.",
+                detail=f"no evaluation has been run for rerank_mode={rerank_mode}. "
+                       "POST /api/eval/run to trigger one.",
             )
         return JSONResponse(content=cached.model_dump())
 
     @app.post("/api/eval/run")
     async def trigger_eval(request: EvalRunRequest | None = None) -> EvalJobResponse:
-        """Start evaluation in the background and return immediately."""
+        """Start evaluation in the background and return immediately.
+
+        The rerank_mode field selects which A/B arm to populate. The two arms
+        (``off`` and ``embedding``) run independently and do not block each
+        other, so both can be triggered back-to-back.
+        """
 
         chunks = (
             Path(request.chunks_path) if request and request.chunks_path else app.state.chunks_path
@@ -482,11 +541,12 @@ def create_app(
         suite = request.suite if request else "full"
 
         with app.state.eval_lock:
-            if app.state.eval_job["status"] == "running":
-                return EvalJobResponse.model_validate(app.state.eval_job)
+            job = app.state.eval_jobs.get(rerank_mode, _idle_job())
+            if job["status"] == "running":
+                return EvalJobResponse.model_validate(job)
 
             job_id = uuid.uuid4().hex
-            app.state.eval_job = {
+            app.state.eval_jobs[rerank_mode] = {
                 "job_id": job_id,
                 "status": "running",
                 "message": None,
@@ -510,13 +570,15 @@ def create_app(
             daemon=True,
         )
         thread.start()
-        return EvalJobResponse.model_validate(app.state.eval_job)
+        return EvalJobResponse.model_validate(app.state.eval_jobs[rerank_mode])
 
     @app.get("/api/eval/status")
-    async def get_eval_status() -> EvalJobResponse:
-        """Return the current background evaluation job state."""
+    async def get_eval_status(rerank_mode: RerankMode = "off") -> EvalJobResponse:
+        """Return the current background evaluation job state for the given arm."""
 
-        return EvalJobResponse.model_validate(app.state.eval_job)
+        return EvalJobResponse.model_validate(
+            app.state.eval_jobs.get(rerank_mode, _idle_job())
+        )
 
     return app
 
@@ -551,9 +613,10 @@ def _run_eval_job(
         )
     except Exception as exc:  # noqa: BLE001 - surfaced through job status
         with app.state.eval_lock:
-            if app.state.eval_job.get("job_id") == job_id:
-                app.state.eval_job = {
-                    **app.state.eval_job,
+            job = app.state.eval_jobs.get(rerank_mode, _idle_job())
+            if job.get("job_id") == job_id:
+                app.state.eval_jobs[rerank_mode] = {
+                    **job,
                     "status": "failed",
                     "message": str(exc),
                     "finished_at": _now_iso(),
@@ -561,11 +624,12 @@ def _run_eval_job(
         return
 
     with app.state.eval_lock:
-        if app.state.eval_job.get("job_id") != job_id:
+        job = app.state.eval_jobs.get(rerank_mode, _idle_job())
+        if job.get("job_id") != job_id:
             return
-        app.state.eval_cache["latest"] = summary
-        app.state.eval_job = {
-            **app.state.eval_job,
+        app.state.eval_cache[rerank_mode] = summary
+        app.state.eval_jobs[rerank_mode] = {
+            **job,
             "status": "succeeded",
             "message": None,
             "finished_at": _now_iso(),
@@ -582,4 +646,6 @@ def _now_iso() -> str:
 # Default app instance (for uvicorn import)
 # ---------------------------------------------------------------------------
 
-app = create_app()
+_DEFAULT_EVAL_CACHE_DIR = Path("artifacts/review_runs")
+
+app = create_app(eval_cache_dir=_DEFAULT_EVAL_CACHE_DIR)

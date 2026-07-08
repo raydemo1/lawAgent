@@ -74,6 +74,12 @@ export type EvalRetrievalMode = 'service' | 'local';
 /** Evaluation review owner under test. */
 export type EvalReviewMode = 'llm' | 'local';
 
+/** Optional post-fusion reranker arm for A/B evaluation. */
+export type EvalRerankMode = 'off' | 'embedding';
+
+/** Evaluation scenario subset. */
+export type EvalSuite = 'quick' | 'base' | 'full';
+
 // ---------------------------------------------------------------------------
 // Review domain models
 // ---------------------------------------------------------------------------
@@ -356,6 +362,8 @@ export interface EvalRunOptions {
   review_mode?: EvalReviewMode;
   top_k?: number;
   max_workers?: number;
+  rerank_mode?: EvalRerankMode;
+  suite?: EvalSuite;
 }
 
 export type EvalJobStatus = 'idle' | 'running' | 'succeeded' | 'failed';

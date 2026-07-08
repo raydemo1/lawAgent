@@ -497,6 +497,75 @@ def test_run_hybrid_retrieval_expands_source_window_when_rerank_is_enabled(
     assert trace.rerank["initial"]["mode"] == "embedding"
 
 
+def test_run_hybrid_retrieval_default_rerank_window_covers_candidate_pool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from law_agent.review.retrieval.rerank import RerankOutcome
+    from law_agent.review.service import (
+        DEFAULT_CANDIDATE_TOP_K,
+        create_review_case,
+        run_hybrid_retrieval,
+    )
+
+    monkeypatch.delenv("RERANK_WINDOW", raising=False)
+
+    chunks = [
+        _make_chunk(
+            chunk_id=f"rerank_default_{index}",
+            doc_id=f"doc_{index}",
+            source_id=f"src_{index}",
+            text=f"第{index}条 数据出境安全评估 申报条件。",
+        )
+        for index in range(DEFAULT_CANDIDATE_TOP_K + 10)
+    ]
+    chunks_path = tmp_path / "chunks.jsonl"
+    write_jsonl(chunks_path, chunks)
+
+    create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="我们会将手机号发送给新加坡服务商用于推荐优化。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+    keyword = _RecordingSearchManyRetriever(chunks, "keyword")
+    vector = _RecordingSearchManyRetriever(chunks, "vector_mock")
+    captured = {}
+
+    def fake_rerank_hits(hits, **kwargs):
+        captured["input_count"] = len(hits)
+        selected = list(hits[: kwargs["top_k"]])
+        return RerankOutcome(
+            hits=selected,
+            info={
+                "mode": kwargs["mode"],
+                "window": len(hits),
+                "input_count": len(hits),
+                "output_count": len(selected),
+            },
+        )
+
+    monkeypatch.setattr(
+        "law_agent.review.service.rerank_hits",
+        fake_rerank_hits,
+    )
+
+    run_hybrid_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+        rerank_mode="embedding",
+        keyword_retriever=keyword,
+        vector_retriever=vector,
+    )
+
+    assert keyword.requested_top_ks == [DEFAULT_CANDIDATE_TOP_K]
+    assert vector.requested_top_ks == [DEFAULT_CANDIDATE_TOP_K]
+    assert captured["input_count"] == DEFAULT_CANDIDATE_TOP_K
+
+
 def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     from law_agent.review.service import create_review_case, run_hybrid_retrieval
 

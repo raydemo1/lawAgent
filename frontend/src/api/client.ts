@@ -16,6 +16,7 @@
 
 import type {
   EvalJobResponse,
+  EvalRerankMode,
   EvalRunOptions,
   EvalSummary,
   HealthResponse,
@@ -378,6 +379,10 @@ export async function submitReview(
  * per-mode metrics, caches the result for `getLatestEval`, and returns
  * the complete summary.
  *
+ * The `rerank_mode` field selects which A/B arm to populate. The two arms
+ * (``off`` and ``embedding``) are cached separately and can be switched
+ * between in the dashboard via `getLatestEval(rerankMode)`.
+ *
  * @returns           The freshly generated evaluation summary.
  * @throws {ApiError} On 400 (bad config) or 500 (server error).
  */
@@ -387,6 +392,8 @@ export async function runEvaluation(
     review_mode: 'llm',
     top_k: 10,
     max_workers: 4,
+    rerank_mode: 'off',
+    suite: 'full',
   },
 ): Promise<EvalJobResponse> {
   return request<EvalJobResponse>('/api/eval/run', {
@@ -395,25 +402,35 @@ export async function runEvaluation(
   });
 }
 
-export async function getEvalStatus(): Promise<EvalJobResponse> {
-  return request<EvalJobResponse>('/api/eval/status', {
-    method: 'GET',
-    timeoutMs: 10_000,
-  });
+export async function getEvalStatus(
+  rerankMode: EvalRerankMode = 'off',
+): Promise<EvalJobResponse> {
+  return request<EvalJobResponse>(
+    `/api/eval/status?rerank_mode=${encodeURIComponent(rerankMode)}`,
+    {
+      method: 'GET',
+      timeoutMs: 10_000,
+    },
+  );
 }
 
 /**
- * Get the most recently cached evaluation summary.
+ * Get the most recently cached evaluation summary for the given rerank arm.
  *
  * @returns           The cached evaluation summary, or `null` if no
- *                    evaluation has been run yet (HTTP 404).
+ *                    evaluation has been run for this arm yet (HTTP 404).
  * @throws {ApiError} On non-404 errors (e.g. 500).
  */
-export async function getLatestEval(): Promise<EvalSummary | null> {
+export async function getLatestEval(
+  rerankMode: EvalRerankMode = 'off',
+): Promise<EvalSummary | null> {
   try {
-    return await request<EvalSummary>('/api/eval/latest', {
-      method: 'GET',
-    });
+    return await request<EvalSummary>(
+      `/api/eval/latest?rerank_mode=${encodeURIComponent(rerankMode)}`,
+      {
+        method: 'GET',
+      },
+    );
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
       return null;

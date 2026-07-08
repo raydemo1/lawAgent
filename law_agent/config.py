@@ -93,6 +93,7 @@ def require_llm_config() -> LLMConfig:
 
 EmbeddingProvider = Literal["openai_compatible", "sentence_transformers", "mock"]
 RerankMode = Literal["off", "embedding"]
+DEFAULT_RERANK_WINDOW = 50
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,7 @@ def load_rerank_config(*, mode: RerankMode | None = None) -> RerankConfig:
             api_key=os.getenv("RERANK_API_KEY") or None,
             model=os.getenv("RERANK_MODEL", ""),
             timeout_seconds=int(os.getenv("RERANK_TIMEOUT_SECONDS", "60")),
-            window=int(os.getenv("RERANK_WINDOW", "30")),
+            window=int(os.getenv("RERANK_WINDOW", str(DEFAULT_RERANK_WINDOW))),
             blend_weight=float(os.getenv("RERANK_BLEND_WEIGHT", "0.4")),
         )
 
@@ -218,7 +219,7 @@ def load_rerank_config(*, mode: RerankMode | None = None) -> RerankConfig:
         timeout_seconds=int(
             os.getenv("RERANK_TIMEOUT_SECONDS", str(embedding.timeout_seconds))
         ),
-        window=int(os.getenv("RERANK_WINDOW", "30")),
+        window=int(os.getenv("RERANK_WINDOW", str(DEFAULT_RERANK_WINDOW))),
         blend_weight=float(os.getenv("RERANK_BLEND_WEIGHT", "0.4")),
     )
 

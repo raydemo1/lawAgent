@@ -158,14 +158,17 @@ def _run_single_case(
         tmp_path = Path(tmpdir)
         service_review_mode = "llm" if review_mode == "llm" else "rule_baseline"
 
-        # Create review case
+        # Evaluation is scoped to retrieval and citation behavior. Keep the
+        # scenario facts and planned queries deterministic so rerank/service
+        # A/B runs compare the retrieval path, not two independent LLM
+        # fact/query-planning samples.
         response = create_review_case(
             question=scenario.question,
             material_text=scenario.material_text,
             output_dir=tmp_path,
             now=lambda: "2026-07-06T00:00:00+00:00",
             id_factory=lambda prefix: f"{prefix}_eval",
-            review_mode=service_review_mode,
+            review_mode="rule_baseline",
         )
 
         case_id = "review_eval"

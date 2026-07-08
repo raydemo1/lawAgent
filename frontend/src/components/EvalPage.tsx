@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, getLatestEval } from '../api/client';
 import type {
   CaseMetricResult,
+  EvalRerankMode,
   EvalSummary,
   ModeMetrics,
 } from '../types/api';
@@ -480,36 +481,40 @@ export default function EvalPage(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedMode, setSelectedMode] = useState<string | null>(null);
+  const [rerankArm, setRerankArm] = useState<EvalRerankMode>('off');
 
-  const fetchLatest = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const latest = await getLatestEval();
-      setSummary(latest);
-      if (latest && latest.mode_metrics) {
-        const keys = Object.keys(latest.mode_metrics);
-        if (keys.length > 0 && !selectedMode) {
-          setSelectedMode(keys[0]);
+  const fetchLatest = useCallback(
+    async (arm: EvalRerankMode = rerankArm) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const latest = await getLatestEval(arm);
+        setSummary(latest);
+        if (latest && latest.mode_metrics) {
+          const keys = Object.keys(latest.mode_metrics);
+          if (keys.length > 0 && !selectedMode) {
+            setSelectedMode(keys[0]);
+          }
         }
-      }
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
+      } catch (err) {
+        setError(
+          err instanceof ApiError
             ? err.message
-            : '读取评测结果失败',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedMode]);
+            : err instanceof Error
+              ? err.message
+              : '读取评测结果失败',
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [rerankArm, selectedMode],
+  );
 
   useEffect(() => {
-    fetchLatest();
+    fetchLatest(rerankArm);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [rerankArm]);
 
   const modeKeys = useMemo(
     () => (summary ? Object.keys(summary.mode_metrics) : []),
@@ -587,10 +592,28 @@ export default function EvalPage(): JSX.Element {
           ) : (
             <div className="eval-header__meta-line">暂无缓存结果</div>
           )}
+          <div className="eval-header__arm-toggle" role="group" aria-label="Rerank 分组">
+            <button
+              type="button"
+              className={`btn-secondary eval-header__arm-btn${rerankArm === 'off' ? ' is-active' : ''}`}
+              onClick={() => setRerankArm('off')}
+              disabled={loading}
+            >
+              ReRank: off
+            </button>
+            <button
+              type="button"
+              className={`btn-secondary eval-header__arm-btn${rerankArm === 'embedding' ? ' is-active' : ''}`}
+              onClick={() => setRerankArm('embedding')}
+              disabled={loading}
+            >
+              ReRank: on
+            </button>
+          </div>
           <button
             type="button"
             className="btn-secondary eval-header__refresh"
-            onClick={fetchLatest}
+            onClick={() => fetchLatest(rerankArm)}
             disabled={loading}
           >
             {loading ? '刷新中…' : '刷新'}
