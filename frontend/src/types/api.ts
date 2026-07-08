@@ -160,6 +160,28 @@ export interface RetrievalQuery {
 }
 
 /**
+ * A scored evidence hit returned by a retriever.
+ *
+ * Matches `RetrievalHit` in `law_agent/review/schemas.py`. Surfaced in the
+ * review response as `evidence_chunks` so the frontend can expand a citation
+ * to show the underlying clause text, source URL, and retrieval metadata.
+ */
+export interface RetrievalHit {
+  chunk_id: string;
+  doc_id: string;
+  source_id: string;
+  title: string;
+  text: string;
+  score: number;
+  rank: number;
+  retriever: RetrieverName;
+  citation_role: ClauseCitationRole;
+  can_cite_clause: boolean;
+  source_url: string;
+  matched_query_type: RetrievalQueryType | null;
+}
+
+/**
  * Plan for one controlled second retrieval when evidence is weak.
  *
  * Matches `SecondRetrievalPlan` in `law_agent/review/schemas.py`.
@@ -220,6 +242,10 @@ export interface ReviewResponse {
   /** Same value as `review_result.applicable_evidence`, surfaced for convenience. */
   citation_groups: CitationGroup[];
   second_retrieval_triggered: boolean;
+  /** Typed retrieval queries planned from the question + facts (query plan). */
+  retrieval_queries?: RetrievalQuery[];
+  /** Final evidence hits with chunk text, used to expand citations inline. */
+  evidence_chunks?: RetrievalHit[];
 }
 
 /**
@@ -269,15 +295,20 @@ export interface CaseMetricResult {
   recall_at_3: number;
   recall_at_5: number;
   mrr_at_10: number;
+  candidate_recall_at_50: number;
+  distinct_source_recall_at_5: number;
+  duplicate_source_count_at_10: number;
   citation_violation_count: number;
   abstention_correct: boolean;
-  second_retrieval_correct: boolean;
+  /** 事实记录：是否触发了二次检索（诊断指标，不计坏例）。 */
+  second_retrieval_triggered: boolean;
   /** Source IDs actually retrieved by the system. */
   actual_sources: string[];
   /** Expected source IDs that were missing from the results. */
   missing_sources: string[];
   is_bad_case: boolean;
   bad_reasons: string[];
+  risk_level: string;
 }
 
 /**
@@ -290,8 +321,12 @@ export interface ModeMetrics {
   mean_recall_at_3: number;
   mean_recall_at_5: number;
   mean_mrr_at_10: number;
+  mean_candidate_recall_at_50: number;
+  mean_distinct_source_recall_at_5: number;
+  mean_duplicate_source_count_at_10: number;
   abstention_accuracy: number;
-  second_retrieval_accuracy: number;
+  /** 诊断指标：二次检索触发率（不计坏例）。 */
+  second_retrieval_trigger_rate: number;
   total_citation_violations: number;
   bad_case_count: number;
   total_cases: number;

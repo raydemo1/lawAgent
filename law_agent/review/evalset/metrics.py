@@ -205,12 +205,15 @@ def evaluate_case(
         if risk_level == "insufficient_evidence":
             abstention_correct = False
 
-    # Second retrieval check
-    second_retrieval_correct = (
-        second_retrieval_triggered == scenario.should_trigger_second_retrieval
-    )
+    # Second retrieval is recorded as a FACT only (did it fire?), not
+    # compared against any expectation and never counted as a bad case.
+    # Whether second retrieval fires is a means, not an end: if the final
+    # result is bad, `low_recall_at_5` / `zero_recall` already flag it
+    # regardless of trigger behavior.
 
     # Determine bad case taxonomy.
+    # Only outcome metrics (recall, abstention, citation gate) can mark a
+    # case as bad. Second retrieval is intentionally excluded.
     bad_reasons: list[str] = []
     bad_categories: list[BadCaseCategory] = []
     if scenario.expected_sources and recall_5 == 0.0 and not scenario.should_abstain:
@@ -235,9 +238,6 @@ def evaluate_case(
     if not abstention_correct:
         bad_reasons.append("abstention_incorrect")
         bad_categories.append("abstention_error")
-    if not second_retrieval_correct:
-        bad_reasons.append("second_retrieval_incorrect")
-        bad_categories.append("second_retrieval_error")
     if citation_violations > 0:
         bad_reasons.append(f"citation_violations={citation_violations}")
         bad_categories.append("citation_gate_error")
@@ -252,7 +252,7 @@ def evaluate_case(
         duplicate_source_count_at_10=duplicate_sources_10,
         citation_violation_count=citation_violations,
         abstention_correct=abstention_correct,
-        second_retrieval_correct=second_retrieval_correct,
+        second_retrieval_triggered=second_retrieval_triggered,
         actual_sources=ordered_unique_sources(hits),
         missing_sources=missing_5,
         is_bad_case=len(bad_reasons) > 0,
@@ -281,7 +281,7 @@ def aggregate_metrics(
             mean_distinct_source_recall_at_5=0.0,
             mean_duplicate_source_count_at_10=0.0,
             abstention_accuracy=0.0,
-            second_retrieval_accuracy=0.0,
+            second_retrieval_trigger_rate=0.0,
             total_citation_violations=0,
             bad_case_count=0,
             bad_case_taxonomy={},
@@ -302,7 +302,9 @@ def aggregate_metrics(
     )
 
     abstention_correct = sum(1 for c in case_results if c.abstention_correct)
-    second_retrieval_correct = sum(1 for c in case_results if c.second_retrieval_correct)
+    second_retrieval_fired = sum(
+        1 for c in case_results if c.second_retrieval_triggered
+    )
 
     total_violations = sum(c.citation_violation_count for c in case_results)
     bad_count = sum(1 for c in case_results if c.is_bad_case)
@@ -321,7 +323,7 @@ def aggregate_metrics(
         mean_distinct_source_recall_at_5=round(mean_distinct_recall_5, 4),
         mean_duplicate_source_count_at_10=round(mean_duplicate_sources_10, 4),
         abstention_accuracy=round(abstention_correct / total, 4),
-        second_retrieval_accuracy=round(second_retrieval_correct / total, 4),
+        second_retrieval_trigger_rate=round(second_retrieval_fired / total, 4),
         total_citation_violations=total_violations,
         bad_case_count=bad_count,
         bad_case_taxonomy=dict(sorted(taxonomy.items())),

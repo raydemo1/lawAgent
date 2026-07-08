@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from law_agent.config import RerankMode
+from law_agent.review.evalset.cases import EvalSuite
 from law_agent.review.evalset.runner import run_evaluation
 from law_agent.review.evalset.runner import ReviewEvalMode, RetrievalEvalMode
 from law_agent.review.evalset.schemas import EvalSummary
@@ -38,6 +39,8 @@ from law_agent.review.schemas import (
     ReviewFailedResponse,
     ReviewFacts,
     ReviewResult,
+    RetrievalHit,
+    RetrievalQuery,
 )
 from law_agent.review.service import (
     DEFAULT_REVIEW_RUNS_DIR,
@@ -70,6 +73,12 @@ class ReviewResponse(BaseModel):
     evidence_self_check: EvidenceSelfCheck
     citation_groups: list[CitationGroup] = Field(default_factory=list)
     second_retrieval_triggered: bool = False
+    # Issue: 审查工作台产品化 — expose the retrieval query plan and the
+    # final evidence hits (with chunk text) so the frontend can render the
+    # full review chain and expand citations to show the underlying clause
+    # text. These are additive and default to empty for backward compat.
+    retrieval_queries: list[RetrievalQuery] = Field(default_factory=list)
+    evidence_chunks: list[RetrievalHit] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -100,6 +109,10 @@ class EvalRunRequest(BaseModel):
     rerank_mode: RerankMode = Field(
         default="off",
         description="Optional post-fusion reranker for A/B eval",
+    )
+    suite: EvalSuite = Field(
+        default="full",
+        description="Evaluation suite to run: base (24 cases) or full (all cases)",
     )
 
 
@@ -300,6 +313,8 @@ def create_app(
                     evidence_self_check=trace.evidence_self_check,
                     citation_groups=review_result.applicable_evidence,
                     second_retrieval_triggered=trace.evidence_self_check.second_retrieval_triggered,
+                    retrieval_queries=trace.queries,
+                    evidence_chunks=trace.final_evidence,
                 )
             except HTTPException:
                 raise
@@ -341,6 +356,7 @@ def create_app(
         top_k = request.top_k if request else 10
         max_workers = request.max_workers if request else 4
         rerank_mode = request.rerank_mode if request else "off"
+        suite = request.suite if request else "full"
 
         with app.state.eval_lock:
             if app.state.eval_job["status"] == "running":
@@ -366,6 +382,7 @@ def create_app(
                 top_k,
                 max_workers,
                 rerank_mode,
+                suite,
             ),
             daemon=True,
         )
@@ -397,6 +414,7 @@ def _run_eval_job(
     top_k: int,
     max_workers: int,
     rerank_mode: RerankMode,
+    suite: EvalSuite,
 ) -> None:
     try:
         summary = run_evaluation(
@@ -406,6 +424,7 @@ def _run_eval_job(
             top_k=top_k,
             rerank_mode=rerank_mode,
             max_workers=max_workers,
+            suite=suite,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced through job status
         with app.state.eval_lock:

@@ -13,7 +13,6 @@ BadCaseCategory = Literal[
     "retrieval_low_recall",
     "candidate_missing",
     "abstention_error",
-    "second_retrieval_error",
     "citation_gate_error",
 ]
 
@@ -35,7 +34,6 @@ class EvalScenario(StrictModel):
         default_factory=list,
         description="citation_role values expected in results",
     )
-    should_trigger_second_retrieval: bool = False
     should_abstain: bool = False
     min_recall_at_5: float = Field(
         default=0.5,
@@ -64,7 +62,9 @@ class CaseMetricResult(StrictModel):
     duplicate_source_count_at_10: int = 0
     citation_violation_count: int
     abstention_correct: bool
-    second_retrieval_correct: bool
+    # Fact only: did the pipeline trigger second retrieval? No expectation
+    # comparison, no bad-case weight — purely diagnostic.
+    second_retrieval_triggered: bool = False
     actual_sources: list[str] = Field(default_factory=list)
     missing_sources: list[str] = Field(default_factory=list)
     is_bad_case: bool = False
@@ -88,7 +88,8 @@ class ModeMetrics(StrictModel):
     mean_distinct_source_recall_at_5: float = 0.0
     mean_duplicate_source_count_at_10: float = 0.0
     abstention_accuracy: float
-    second_retrieval_accuracy: float
+    # Diagnostic only: fraction of cases where second retrieval fired.
+    second_retrieval_trigger_rate: float = 0.0
     total_citation_violations: int
     bad_case_count: int
     bad_case_taxonomy: dict[str, int] = Field(default_factory=dict)

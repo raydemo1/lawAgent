@@ -253,7 +253,7 @@ def format_summary_text(summary: EvalSummary) -> str:
         lines.append(f"  Distinct Recall@5:  {metrics.mean_distinct_source_recall_at_5:.4f}")
         lines.append(f"  Duplicate src@10:   {metrics.mean_duplicate_source_count_at_10:.4f}")
         lines.append(f"  Abstention accuracy: {metrics.abstention_accuracy:.4f}")
-        lines.append(f"  Second retrieval:   {metrics.second_retrieval_accuracy:.4f}")
+        lines.append(f"  Second retrieval trigger rate: {metrics.second_retrieval_trigger_rate:.4f}")
         lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
         if metrics.bad_case_taxonomy:

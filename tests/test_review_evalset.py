@@ -328,36 +328,28 @@ def test_evaluate_case_abstention_incorrect() -> None:
     assert "abstention_error" in result.bad_case_categories
 
 
-def test_evaluate_case_second_retrieval_correct() -> None:
+def test_evaluate_case_second_retrieval_recorded_as_fact() -> None:
+    """Second retrieval is recorded as a fact, never drives bad-case."""
     scenario = EvalScenario(
         case_id="test_005",
         question="问题",
         material_text="材料",
         expected_sources=["s1"],
-        should_trigger_second_retrieval=True,
     )
     hits = [_hit(source_id="s1")]
 
-    result = evaluate_case(scenario, hits, second_retrieval_triggered=True)
+    triggered = evaluate_case(scenario, hits, second_retrieval_triggered=True)
+    not_triggered = evaluate_case(scenario, hits, second_retrieval_triggered=False)
 
-    assert result.second_retrieval_correct is True
-
-
-def test_evaluate_case_second_retrieval_incorrect() -> None:
-    scenario = EvalScenario(
-        case_id="test_006",
-        question="问题",
-        material_text="材料",
-        expected_sources=["s1"],
-        should_trigger_second_retrieval=True,
-    )
-    hits = [_hit(source_id="s1")]
-
-    result = evaluate_case(scenario, hits, second_retrieval_triggered=False)
-
-    assert result.second_retrieval_correct is False
-    assert "second_retrieval_incorrect" in result.bad_reasons
-    assert "second_retrieval_error" in result.bad_case_categories
+    assert triggered.second_retrieval_triggered is True
+    assert not_triggered.second_retrieval_triggered is False
+    # Neither should be a bad case purely due to second retrieval behavior.
+    assert not triggered.is_bad_case
+    assert not not_triggered.is_bad_case
+    assert "second_retrieval_incorrect" not in triggered.bad_reasons
+    assert "second_retrieval_incorrect" not in not_triggered.bad_reasons
+    assert "second_retrieval_error" not in triggered.bad_case_categories
+    assert "second_retrieval_error" not in not_triggered.bad_case_categories
 
 
 def test_evaluate_case_citation_violation_is_bad() -> None:
@@ -389,14 +381,14 @@ def test_aggregate_metrics_calculates_means() -> None:
             candidate_recall_at_50=1.0, distinct_source_recall_at_5=1.0,
             duplicate_source_count_at_10=0,
             citation_violation_count=0, abstention_correct=True,
-            second_retrieval_correct=True,
+            second_retrieval_triggered=True,
         ),
         CaseMetricResult(
             case_id="c2", recall_at_3=0.5, recall_at_5=0.5, mrr_at_10=0.5,
             candidate_recall_at_50=0.75, distinct_source_recall_at_5=0.25,
             duplicate_source_count_at_10=2,
             citation_violation_count=1, abstention_correct=False,
-            second_retrieval_correct=False, is_bad_case=True,
+            second_retrieval_triggered=False, is_bad_case=True,
             bad_reasons=["test"], bad_case_categories=["abstention_error"],
         ),
     ]
@@ -411,7 +403,7 @@ def test_aggregate_metrics_calculates_means() -> None:
     assert metrics.mean_distinct_source_recall_at_5 == 0.625
     assert metrics.mean_duplicate_source_count_at_10 == 1.0
     assert metrics.abstention_accuracy == 0.5
-    assert metrics.second_retrieval_accuracy == 0.5
+    assert metrics.second_retrieval_trigger_rate == 0.5
     assert metrics.total_citation_violations == 1
     assert metrics.bad_case_count == 1
     assert metrics.bad_case_taxonomy == {"abstention_error": 1}
@@ -487,7 +479,7 @@ def test_format_summary_text_contains_key_metrics() -> None:
                 mean_recall_at_5=0.8000,
                 mean_mrr_at_10=0.9000,
                 abstention_accuracy=1.0,
-                second_retrieval_accuracy=0.5,
+                second_retrieval_trigger_rate=0.5,
                 total_citation_violations=0,
                 bad_case_count=1,
                 total_cases=10,

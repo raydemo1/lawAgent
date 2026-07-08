@@ -45,6 +45,8 @@ export interface WorkbenchPageProps {
   error: string | null;
   /** Number of accumulated review records, for the empty-state hint. */
   historyCount?: number;
+  /** Open the most recent result as a full case-detail view. */
+  onViewDetail?: () => void;
 }
 
 /** Human-readable labels for citation usage categories. */
@@ -123,6 +125,7 @@ export default function WorkbenchPage({
   result,
   error,
   historyCount,
+  onViewDetail,
 }: WorkbenchPageProps): JSX.Element {
   // Selected file state — file is submitted directly with the review,
   // not pre-extracted. The backend saves it as part of the review case.
@@ -315,6 +318,23 @@ export default function WorkbenchPage({
         </section>
       ) : reviewResult && facts ? (
         <section className="workbench__result">
+          {/* Full-chain entry — the case-detail page shows the query plan,
+              evidence chunks, self-check issues, and feedback controls. */}
+          {onViewDetail ? (
+            <div className="workbench__detail-entry">
+              <span>
+                审查已完成并保存到案卷历史。查看完整审查链路（查询计划 / 证据原文 / 自检 / 反馈 / 导出）：
+              </span>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={onViewDetail}
+              >
+                查看完整案卷详情 →
+              </button>
+            </div>
+          ) : null}
+
           {/* (a) Risk level + evidence self-check status */}
           <div
             className="card"

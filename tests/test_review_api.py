@@ -244,10 +244,10 @@ def test_eval_latest_returns_404_when_not_run(client: TestClient) -> None:
 
 
 def test_eval_latest_returns_summary_after_run(client: TestClient) -> None:
-    # First trigger an eval run
+    # First trigger an eval run (quick suite keeps the test fast).
     run_response = client.post(
         "/api/eval/run",
-        json={"retrieval_mode": "local", "review_mode": "local"},
+        json={"retrieval_mode": "local", "review_mode": "local", "suite": "quick"},
     )
     assert run_response.status_code == 200
     assert run_response.json()["status"] in ("running", "succeeded")
@@ -293,7 +293,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
             mean_recall_at_5=0.5,
             mean_mrr_at_10=0.5,
             abstention_accuracy=1.0,
-            second_retrieval_accuracy=1.0,
+            second_retrieval_trigger_rate=0.0,
             total_citation_violations=0,
             bad_case_count=0,
             total_cases=1,
@@ -349,7 +349,7 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     # Run eval on app1 — this caches the result in app1's state only.
     run_response = client1.post(
         "/api/eval/run",
-        json={"retrieval_mode": "local", "review_mode": "local"},
+        json={"retrieval_mode": "local", "review_mode": "local", "suite": "quick"},
     )
     assert run_response.status_code == 200
     _wait_for_eval_job(client1)

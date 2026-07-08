@@ -123,7 +123,7 @@ def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
             mrr_at_10=1.0,
             citation_violation_count=0,
             abstention_correct=True,
-            second_retrieval_correct=True,
+            second_retrieval_triggered=False,
         )
 
     monkeypatch.setattr(runner_module, "_run_single_case", fake_run_single_case)

@@ -111,7 +111,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_data_export_security_assessment_measures_2022",
         ],
         expected_citation_roles=["primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["cross_border", "regional", "boundary"],
     ),
 
@@ -285,7 +284,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_data_export_security_assessment_measures_2022",
         ],
         expected_citation_roles=["conditional_industry_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["automotive", "cross_border", "guideline"],
     ),
     EvalScenario(
@@ -332,7 +330,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "missing_20260702_009",
         ],
         expected_citation_roles=["conditional_industry_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["automotive", "important_data", "assessment"],
     ),
 
@@ -373,7 +370,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_industry_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["financial", "cross_border", "classification"],
     ),
     EvalScenario(
@@ -401,7 +397,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "fujian", "negative_list"],
     ),
     EvalScenario(
@@ -413,7 +408,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "guangdong", "negative_list"],
     ),
     EvalScenario(
@@ -425,7 +419,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "jiangsu", "negative_list"],
     ),
     EvalScenario(
@@ -437,7 +430,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "guangxi", "negative_list"],
     ),
     EvalScenario(
@@ -461,7 +453,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "zhejiang", "fujian", "compare"],
     ),
     EvalScenario(
@@ -474,7 +465,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "guangdong", "hainan", "compare"],
     ),
     EvalScenario(
@@ -486,7 +476,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_cross_border_data_flow_rules_2024",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["regional", "shanghai", "boundary"],
     ),
     EvalScenario(
@@ -694,7 +683,6 @@ FULL_EXTRA_SCENARIOS: list[EvalScenario] = [
             "cac_data_export_security_assessment_measures_2022",
         ],
         expected_citation_roles=["conditional_local_basis", "primary_legal_basis"],
-        should_trigger_second_retrieval=True,
         tags=["conflict", "regional", "assessment_threshold"],
     ),
     EvalScenario(
