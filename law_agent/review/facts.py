@@ -472,9 +472,11 @@ def build_fact_extraction_messages(
         "json_example": json_example,
         "instructions": [
             "只基于用户材料抽取事实，不要推测材料中没有的信息。",
+            "问题里的假设或法名不等于材料事实；例如用户问“是否出境/是否触发安全评估”时，除非材料明确说明出境安排，否则 cross_border_transfer 为 null。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "未检测到的事实用 null，列表字段用 []。",
             "missing_information 只列出仍需用户补充的事实键。",
+            "当材料含「一些」「某些」「未确定」「没有说明」等模糊限定词时，不要将对应字段设为 true；应把缺口放入 missing_information。",
         ],
     }
 

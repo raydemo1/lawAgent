@@ -22,9 +22,9 @@ DEFAULT_SOURCE_SUPPORT_DECAY = 0.35
 DEFAULT_CONTEXT_SUPPORT_DECAY = 0.45
 DEFAULT_NEAR_DUPLICATE_SIMILARITY = 0.82
 SOURCE_QUERY_TYPE_WEIGHTS = {
-    "industry_condition": 1.2,
-    "region_condition": 1.2,
-    "material_fact": 1.1,
+    "industry_condition": 1.05,
+    "region_condition": 1.0,
+    "material_fact": 1.05,
     "missing_information": 0.7,
 }
 

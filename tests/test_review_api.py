@@ -321,13 +321,13 @@ def test_eval_run_accepts_retrieval_and_review_modes(
     )
 
     assert response.status_code == 200
-    _wait_for_eval_job(client)
+    _wait_for_eval_job(client, rerank_mode="embedding")
     assert captured["retrieval_mode"] == "service"
     assert captured["review_mode"] == "llm"
     assert captured["top_k"] == 7
     assert captured["max_workers"] == 3
     assert captured["rerank_mode"] == "embedding"
-    latest = client.get("/api/eval/latest")
+    latest = client.get("/api/eval/latest?rerank_mode=embedding")
     assert latest.status_code == 200
     assert "retrieval=service,review=llm" in latest.json()["mode_metrics"]
 
@@ -364,11 +364,11 @@ def test_eval_cache_isolated_between_apps(fixture_corpus: Path) -> None:
     assert "detail" in latest2.json()
 
 
-def _wait_for_eval_job(client: TestClient) -> dict:
+def _wait_for_eval_job(client: TestClient, rerank_mode: str = "off") -> dict:
     deadline = time.monotonic() + 10
     latest = {}
     while time.monotonic() < deadline:
-        response = client.get("/api/eval/status")
+        response = client.get(f"/api/eval/status?rerank_mode={rerank_mode}")
         assert response.status_code == 200
         latest = response.json()
         if latest["status"] in ("succeeded", "failed"):

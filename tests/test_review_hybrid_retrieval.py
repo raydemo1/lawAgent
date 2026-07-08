@@ -7,6 +7,9 @@ import pytest
 from law_agent.data.io import write_jsonl
 from law_agent.data.schemas import Chunk
 from law_agent.review.retrieval.boosts import (
+    CONDITIONAL_INDUSTRY_MISMATCH_WEIGHT,
+    CONDITIONAL_LOCAL_MISMATCH_WEIGHT,
+    CROSS_BORDER_PRIMARY_LEGAL_BASIS_BOOST,
     INTERPRETATION_AUXILIARY_BOOST,
     MISSING_INFORMATION_QUERY_WEIGHT,
     PRIMARY_LEGAL_BASIS_BOOST,
@@ -86,6 +89,23 @@ def test_primary_legal_basis_gets_boost() -> None:
     assert boost == pytest.approx(PRIMARY_LEGAL_BASIS_BOOST)
 
 
+def test_cross_border_primary_legal_basis_gets_extra_soft_boost() -> None:
+    hit = RetrievalHit(
+        chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
+        score=1.0, rank=0, retriever="keyword",
+        citation_role="primary_legal_basis", can_cite_clause=True, source_url="u",
+    )
+    chunk = _make_chunk(chunk_id="c1").model_copy(
+        update={"topic_tags": ["数据出境", "数据合规"]}
+    )
+    facts = ReviewFacts(cross_border_transfer=True)
+
+    boost = compute_boost_for_hit(hit, chunk, facts)
+    assert boost == pytest.approx(
+        PRIMARY_LEGAL_BASIS_BOOST * CROSS_BORDER_PRIMARY_LEGAL_BASIS_BOOST
+    )
+
+
 def test_interpretation_auxiliary_gets_demoted() -> None:
     hit = RetrievalHit(
         chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
@@ -116,7 +136,24 @@ def test_conditional_local_basis_boosted_when_region_matches() -> None:
     assert boost > 1.0
 
 
-def test_conditional_local_basis_not_boosted_when_region_mismatch() -> None:
+def test_conditional_local_basis_boosted_when_ftz_region_matches_parent() -> None:
+    hit = RetrievalHit(
+        chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
+        score=1.0, rank=0, retriever="keyword",
+        citation_role="conditional_local_basis", can_cite_clause=False, source_url="u",
+    )
+    chunk = _make_chunk(
+        chunk_id="c1",
+        citation_role="conditional_local_basis",
+        applicable_region="CN-CQ",
+    )
+    facts = ReviewFacts(region="CN-CQ-FTZ")
+
+    boost = compute_boost_for_hit(hit, chunk, facts)
+    assert boost > 1.0
+
+
+def test_conditional_local_basis_downweighted_when_region_mismatch() -> None:
     hit = RetrievalHit(
         chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
         score=1.0, rank=0, retriever="keyword",
@@ -130,7 +167,7 @@ def test_conditional_local_basis_not_boosted_when_region_mismatch() -> None:
     facts = ReviewFacts(region="上海")
 
     boost = compute_boost_for_hit(hit, chunk, facts)
-    assert boost == 1.0  # no boost when region doesn't match
+    assert boost == pytest.approx(CONDITIONAL_LOCAL_MISMATCH_WEIGHT)
 
 
 def test_conditional_industry_basis_boosted_when_industry_matches() -> None:
@@ -147,6 +184,38 @@ def test_conditional_industry_basis_boosted_when_industry_matches() -> None:
 
     boost = compute_boost_for_hit(hit, chunk, facts)
     assert boost > 1.0
+
+
+def test_conditional_industry_basis_uses_industry_aliases() -> None:
+    hit = RetrievalHit(
+        chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
+        score=1.0, rank=0, retriever="keyword",
+        citation_role="conditional_industry_basis", can_cite_clause=True, source_url="u",
+    )
+    chunk = _make_chunk(
+        chunk_id="c1",
+        citation_role="conditional_industry_basis",
+    ).model_copy(update={"applicable_subjects": ["智能网联汽车企业"], "topic_tags": []})
+    facts = ReviewFacts(industry="车联网")
+
+    boost = compute_boost_for_hit(hit, chunk, facts)
+    assert boost > 1.0
+
+
+def test_conditional_industry_basis_downweighted_when_industry_mismatch() -> None:
+    hit = RetrievalHit(
+        chunk_id="c1", doc_id="d1", source_id="s1", title="t", text="x",
+        score=1.0, rank=0, retriever="keyword",
+        citation_role="conditional_industry_basis", can_cite_clause=True, source_url="u",
+    )
+    chunk = _make_chunk(
+        chunk_id="c1",
+        citation_role="conditional_industry_basis",
+    ).model_copy(update={"applicable_subjects": ["金融机构"], "topic_tags": ["金融"]})
+    facts = ReviewFacts(industry="车联网")
+
+    boost = compute_boost_for_hit(hit, chunk, facts)
+    assert boost == pytest.approx(CONDITIONAL_INDUSTRY_MISMATCH_WEIGHT)
 
 
 def test_boosts_summary_records_active_rules() -> None:

@@ -97,7 +97,7 @@ def test_run_keyword_retrieval_preserves_queries_and_evidence_check(tmp_path: Pa
     assert trace.hybrid_results == []
 
 
-def test_create_review_case_llm_mode_adds_high_confidence_query_supplements(
+def test_create_review_case_llm_mode_does_not_add_rule_fallback_supplements(
     tmp_path: Path,
 ) -> None:
     def llm_missed_facts(_material_text: str, _question: str | None = None) -> ReviewFacts:
@@ -123,11 +123,9 @@ def test_create_review_case_llm_mode_adds_high_confidence_query_supplements(
         query_planner=llm_missed_queries,
     )
 
-    assert response.review_case.review_facts.region == "天津"
-    assert response.review_case.review_facts.industry == "智能网联汽车"
+    assert response.review_case.review_facts == ReviewFacts()
     query_types = [query.query_type for query in response.trace.queries]
-    assert "region_condition" in query_types
-    assert "industry_condition" in query_types
+    assert query_types == ["legal_issue"]
     assert "missing_information" not in query_types
 
 

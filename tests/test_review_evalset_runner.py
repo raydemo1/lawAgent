@@ -13,9 +13,7 @@ from pathlib import Path
 from law_agent.data.io import write_jsonl
 from law_agent.review.evalset.cases import get_default_scenarios
 from law_agent.review.evalset.metrics import evaluate_case
-from law_agent.review.evalset.schemas import EvalScenario
-from law_agent.review.evalset.runner import EvalCaseInput, _run_single_case, run_evaluation
-from law_agent.review.schemas import EvidenceSelfCheck, RetrievalTrace, ReviewFacts
+from law_agent.review.evalset.runner import _run_single_case, run_evaluation
 import law_agent.review.evalset.runner as runner_module
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
@@ -95,56 +93,6 @@ def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypa
     assert captured[0] is not None
 
 
-def test_llm_eval_freezes_facts_and_queries_for_rerank_ab(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """LLM eval should not make rerank A/B depend on fresh fact/query LLM calls."""
-
-    chunks_path = _write_fixture_corpus(tmp_path)
-    scenario = EvalScenario(
-        case_id="eval_freeze",
-        question="是否需要数据出境安全评估？",
-        material_text="手机号发送给新加坡服务商。",
-        expected_sources=[],
-        should_abstain=True,
-    )
-    captured = {}
-    original_create_review_case = runner_module.create_review_case
-
-    def spy_create_review_case(*args, **kwargs):
-        captured["create_review_mode"] = kwargs.get("review_mode")
-        return original_create_review_case(*args, **kwargs)
-
-    def fake_run_hybrid_retrieval(*args, **kwargs):
-        captured["retrieval_review_mode"] = kwargs.get("review_mode")
-        return RetrievalTrace(
-            trace_id="trace_eval",
-            review_case_id="review_eval",
-            created_at="2026-07-06T00:00:00+00:00",
-            evidence_self_check=EvidenceSelfCheck(status="sufficient"),
-        )
-
-    monkeypatch.setattr(runner_module, "create_review_case", spy_create_review_case)
-    monkeypatch.setattr(runner_module, "run_hybrid_retrieval", fake_run_hybrid_retrieval)
-
-    _run_single_case(
-        scenario,
-        chunks_path,
-        retrieval_mode="local",
-        review_mode="llm",
-        top_k=5,
-        rerank_mode="embedding",
-        eval_input=EvalCaseInput(
-            facts=ReviewFacts(),
-            queries=[],
-        ),
-    )
-
-    assert captured["create_review_mode"] == "rule_baseline"
-    assert captured["retrieval_review_mode"] == "llm"
-
-
 def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
     tmp_path: Path,
     monkeypatch,
@@ -164,7 +112,6 @@ def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
         rerank_mode="off",
         service_adapters=None,
         service_config=None,
-        eval_input=None,
     ):
         captured.append(scenario.case_id)
         from law_agent.review.evalset.schemas import CaseMetricResult

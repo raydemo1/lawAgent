@@ -278,11 +278,12 @@ def create_app(
         "embedding": _idle_job(),
     }
     app.state.eval_lock = threading.Lock()
+    app.state.eval_cache_dir = Path(eval_cache_dir) if eval_cache_dir is not None else None
 
     # Pre-populate eval cache from disk so the dashboard can display the
     # latest A/B results without waiting for a fresh run.
-    if eval_cache_dir is not None:
-        _preload_eval_cache(app, Path(eval_cache_dir))
+    if app.state.eval_cache_dir is not None:
+        _preload_eval_cache(app, app.state.eval_cache_dir)
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -512,6 +513,8 @@ def create_app(
         Returns 404 if no evaluation has been run for this rerank_mode yet.
         """
 
+        if app.state.eval_cache_dir is not None:
+            _preload_eval_cache(app, app.state.eval_cache_dir)
         cached = app.state.eval_cache.get(rerank_mode)
         if cached is None:
             raise HTTPException(

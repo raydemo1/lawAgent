@@ -17,7 +17,6 @@ from law_agent.review.facts import (
     FactsExtractor,
     extract_facts,
     extract_facts_with_deepseek,
-    merge_facts_with_rule_fallback,
 )
 from law_agent.review.ids import make_id, utc_now_iso
 from law_agent.review.io import (
@@ -32,8 +31,6 @@ from law_agent.review.io import (
 from law_agent.review.materials import material_from_text
 from law_agent.review.query_planner import (
     QueryPlanner,
-    merge_queries_with_rule_fallback,
-    plan_high_confidence_queries,
     plan_queries,
     plan_queries_with_deepseek,
 )
@@ -122,13 +119,6 @@ def create_review_case(
 
     facts = facts_extractor(material.material_text, question)
     queries: list[RetrievalQuery] = query_planner(question, facts, material.material_text)
-    if review_mode == "llm":
-        rule_facts = extract_facts(material.material_text, question)
-        facts = merge_facts_with_rule_fallback(facts, rule_facts)
-        supplemental_queries = plan_high_confidence_queries(
-            question, facts, material.material_text
-        )
-        queries = merge_queries_with_rule_fallback(queries, supplemental_queries)
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -395,7 +385,13 @@ def run_hybrid_retrieval(
 
     # Issue 7: Evidence self-check
     if review_mode == "llm":
-        self_check = run_self_check_with_deepseek(hybrid_hits, facts, chunks_by_id)
+        self_check = run_self_check_with_deepseek(
+            hybrid_hits,
+            facts,
+            chunks_by_id,
+            question=case.question,
+            material_text=case.material.material_text,
+        )
         self_check = validate_llm_self_check(
             self_check, hybrid_hits, facts, chunks_by_id
         )

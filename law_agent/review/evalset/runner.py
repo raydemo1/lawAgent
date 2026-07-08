@@ -7,9 +7,7 @@ and produces a comparison summary.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-import json
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -30,7 +28,6 @@ from law_agent.review.io import (
 from law_agent.review.query_planner import plan_queries
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
 from law_agent.review.service import create_review_case, run_hybrid_retrieval
-from law_agent.review.schemas import ReviewFacts, RetrievalQuery
 
 RetrievalEvalMode = Literal["service", "local"]
 ReviewEvalMode = Literal["llm", "local"]
@@ -39,15 +36,6 @@ DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
 DEFAULT_RERANK_MODE: RerankMode = "off"
 DEFAULT_EVAL_SUITE: EvalSuite = "full"
 DEFAULT_MAX_WORKERS = 4
-DEFAULT_EVAL_INPUTS_DIR = Path("artifacts/review_runs/eval_inputs")
-
-
-@dataclass(frozen=True)
-class EvalCaseInput:
-    """Frozen facts and retrieval queries for stable eval A/B runs."""
-
-    facts: ReviewFacts
-    queries: list[RetrievalQuery]
 
 
 def run_evaluation(
@@ -60,7 +48,6 @@ def run_evaluation(
     review_mode: ReviewEvalMode = DEFAULT_REVIEW_MODE,
     rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     max_workers: int = DEFAULT_MAX_WORKERS,
-    eval_inputs_path: Path | str | None = None,
 ) -> EvalSummary:
     """Run full evaluation across selected modes.
 
@@ -75,18 +62,6 @@ def run_evaluation(
 
     eval_key = _eval_key(retrieval_mode, review_mode, rerank_mode)
     max_workers = max(1, max_workers)
-    eval_inputs: dict[str, EvalCaseInput] = {}
-    if review_mode == "llm":
-        resolved_inputs_path = _default_eval_inputs_path(
-            suite=suite,
-            cases_label=cases_label,
-            eval_inputs_path=eval_inputs_path,
-        )
-        if resolved_inputs_path is not None:
-            eval_inputs = _load_or_build_eval_inputs(
-                resolved_inputs_path,
-                scenarios,
-            )
 
     # Serial service retrieval can reuse adapters. Parallel service retrieval
     # must not share the pgvector Postgres connection across threads, so each
@@ -117,7 +92,6 @@ def run_evaluation(
                         top_k=top_k,
                         service_adapters=service_adapters,
                         service_config=service_config,
-                        eval_input=eval_inputs.get(scenario.case_id),
                     ),
                     scenarios,
                 )
@@ -167,78 +141,6 @@ def _prewarm_service_eval_queries(service_adapters: object, scenarios: list[Eval
     prewarm(queries)
 
 
-def _default_eval_inputs_path(
-    *,
-    suite: EvalSuite,
-    cases_label: str,
-    eval_inputs_path: Path | str | None,
-) -> Path | None:
-    if eval_inputs_path is not None:
-        return Path(eval_inputs_path)
-    if cases_label == "custom":
-        return None
-    return DEFAULT_EVAL_INPUTS_DIR / f"{suite}_llm_inputs.jsonl"
-
-
-def _load_or_build_eval_inputs(
-    path: Path,
-    scenarios: list[EvalScenario],
-) -> dict[str, EvalCaseInput]:
-    loaded: dict[str, EvalCaseInput] = {}
-    if path.exists():
-        loaded = _read_eval_inputs(path)
-        if all(scenario.case_id in loaded for scenario in scenarios):
-            return loaded
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        for scenario in scenarios:
-            if scenario.case_id in loaded:
-                continue
-            eval_input = _build_eval_input(scenario)
-            payload = {
-                "case_id": scenario.case_id,
-                "facts": eval_input.facts.model_dump(),
-                "queries": [query.model_dump() for query in eval_input.queries],
-            }
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            handle.flush()
-            loaded[scenario.case_id] = eval_input
-    return loaded
-
-
-def _read_eval_inputs(path: Path) -> dict[str, EvalCaseInput]:
-    inputs: dict[str, EvalCaseInput] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        payload = json.loads(line)
-        inputs[payload["case_id"]] = EvalCaseInput(
-            facts=ReviewFacts.model_validate(payload["facts"], strict=True),
-            queries=[
-                RetrievalQuery.model_validate(query, strict=True)
-                for query in payload["queries"]
-            ],
-        )
-    return inputs
-
-
-def _build_eval_input(scenario: EvalScenario) -> EvalCaseInput:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        response = create_review_case(
-            question=scenario.question,
-            material_text=scenario.material_text,
-            output_dir=Path(tmpdir),
-            now=lambda: "2026-07-06T00:00:00+00:00",
-            id_factory=lambda prefix: f"{prefix}_eval",
-            review_mode="llm",
-        )
-    return EvalCaseInput(
-        facts=response.review_case.review_facts,
-        queries=response.trace.queries,
-    )
-
-
 def _run_single_case(
     scenario: EvalScenario,
     chunks_path: Path | str,
@@ -249,7 +151,6 @@ def _run_single_case(
     rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     service_adapters: object | None = None,
     service_config: object | None = None,
-    eval_input: EvalCaseInput | None = None,
 ) -> CaseMetricResult:
     """Run a single scenario in one mode and return metrics."""
 
@@ -257,23 +158,13 @@ def _run_single_case(
         tmp_path = Path(tmpdir)
         service_review_mode = "llm" if review_mode == "llm" else "rule_baseline"
 
-        facts_extractor = None
-        query_planner = None
-        create_review_mode = service_review_mode
-        if eval_input is not None:
-            create_review_mode = "rule_baseline"
-            facts_extractor = lambda _material, _question=None: eval_input.facts
-            query_planner = lambda _question, _facts, _material=None: eval_input.queries
-
         response = create_review_case(
             question=scenario.question,
             material_text=scenario.material_text,
             output_dir=tmp_path,
             now=lambda: "2026-07-06T00:00:00+00:00",
             id_factory=lambda prefix: f"{prefix}_eval",
-            review_mode=create_review_mode,
-            facts_extractor=facts_extractor,
-            query_planner=query_planner,
+            review_mode=service_review_mode,
         )
 
         case_id = "review_eval"

@@ -102,7 +102,6 @@ def _has_no_substantive_facts(facts: ReviewFacts) -> bool:
     has_sensitive = _is_truthy(facts.sensitive_personal_info)
     has_industry = _is_truthy(facts.industry)
     has_region = _is_truthy(facts.region)
-    # Filter out generic terms like "数据" that carry no legal specificity
     specific_data_types = [
         dt for dt in facts.data_types
         if dt not in ("数据", "信息", "个人信息", "") + _NULLISH
@@ -393,16 +392,32 @@ def build_result_generation_messages(
         ],
         "second_retrieval": second_retrieval or {},
         "evidence": evidence,
+        "corpus_scope": {
+            "jurisdiction": "中国大陆数据合规和个人信息保护语料",
+            "includes": [
+                "个人信息保护法、数据安全法、网络安全法、网络数据安全管理条例",
+                "数据出境安全评估、个人信息出境标准合同、个人信息保护认证",
+                "国家网信部门政策问答、TC260 标准、自贸区地方数据出境清单、汽车/金融等行业材料",
+            ],
+            "excludes": [
+                "EU AI Act",
+                "CCPA/CPRA",
+                "其他外国法或非数据合规领域问题",
+            ],
+        },
         "json_example": json_example,
         "instructions": [
             "基于审查事实和证据生成结构化审查结果。",
             "必须结合 question、material_excerpt、retrieval_queries 和 evidence_self_check 判断结论边界。",
+            "只能基于 corpus_scope 内的中国数据合规语料和 evidence 作答；如果 question 明确询问 corpus_scope.excludes 中的法域或制度，risk_level 必须为 insufficient_evidence。",
+            "不要过度谨慎：如果材料已有可审查事实且 evidence 支持相关规则，即使缺少数据规模、同意状态、备案细节等信息，也要给出 high、medium 或 low 的有边界判断。",
+            "缺失事实优先写入 missing_information、recommended_actions 和 risk_boundaries；不要仅因存在 missing_information 就输出 insufficient_evidence。",
+            "如果材料没有说明关键事实（数据类型、处理目的、是否出境、接收方、地区/行业等），不要把 question 中的假设当作事实；只有在无法形成任何有用边界判断时才输出 insufficient_evidence。",
+            "当 evidence_self_check.status 为 sufficient，且材料至少包含一个实质法律维度（如数据类型、处理目的、跨境安排、地区、行业、个人信息/敏感信息），通常不应输出 insufficient_evidence。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "risk_level 只能是 high、medium、low、insufficient_evidence。",
-            "当 evidence_self_check.status 为 sufficient 时，不应输出 insufficient_evidence，"
-            "除非材料完全没有实质性法律维度（如仅含「我们处理一些数据」等模糊描述）。",
-            "insufficient_evidence 仅适用于证据自检判定为 insufficient "
-            "或材料无实质法律维度的情形，不应因 missing_information 中的输入质量缺陷而弃答。",
+            "evidence_self_check.status=sufficient 表示证据可用于当前语料范围内的判断；若事实有缺口但仍可形成边界判断，不要拒答。",
+            "insufficient_evidence 只适用于：证据自检 insufficient、材料几乎没有可审查事实、问题超出 corpus_scope、或证据与问题/材料明显不匹配。",
             "不得编造未出现在证据中的法律来源。",
             "引用分组由程序处理，本节点不要输出 citations。",
             "不要输出解释、markdown 或自然语言。",
@@ -461,23 +476,6 @@ def build_review_result_with_deepseek(
             second_retrieval=second_retrieval,
         )
     )
-
-    # Guardrail: LLM may still abstain even when evidence is sufficient.
-    # If self-check is sufficient and facts have substantive legal dimensions,
-    # override false abstention to the rule-based risk level.
-    if (
-        self_check.status == "sufficient"
-        and not _has_no_substantive_facts(facts)
-        and draft.risk_level == "insufficient_evidence"
-    ):
-        has_legal_basis = any(
-            hit.citation_role == "primary_legal_basis" for hit in evidence_hits
-        )
-        rule_risk = determine_risk_level(facts, self_check, has_legal_basis)
-        draft = draft.model_copy(update={
-            "risk_level": rule_risk,
-            "conclusion": build_conclusion(facts, rule_risk, self_check),
-        })
 
     citation_groups, _violations = group_citations(evidence_hits, facts, chunks_by_id)
     all_citations: list[Citation] = []

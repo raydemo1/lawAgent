@@ -301,6 +301,9 @@ def run_self_check(
 def build_evidence_check_messages(
     hits: list[RetrievalHit],
     facts: ReviewFacts,
+    *,
+    question: str | None = None,
+    material_text: str | None = None,
 ) -> list[ChatMessage]:
     """Build a DeepSeek JSON prompt for evidence sufficiency checking."""
 
@@ -339,11 +342,32 @@ def build_evidence_check_messages(
         for hit in hits[:12]
     ]
     payload = {
+        "question": question,
+        "material_excerpt": (material_text or "")[:3000],
         "review_facts": facts.model_dump(),
         "evidence": evidence,
+        "corpus_scope": {
+            "jurisdiction": "中国大陆数据合规和个人信息保护语料",
+            "includes": [
+                "个人信息保护法、数据安全法、网络安全法、网络数据安全管理条例",
+                "数据出境安全评估、个人信息出境标准合同、个人信息保护认证",
+                "国家网信部门政策问答、TC260 标准、自贸区地方数据出境清单、汽车/金融等行业材料",
+            ],
+            "excludes": [
+                "EU AI Act",
+                "CCPA/CPRA",
+                "其他外国法或非数据合规领域问题",
+            ],
+        },
         "json_example": json_example,
         "instructions": [
             "判断证据是否足以支持材料驱动合规审查。",
+            "必须结合 question、material_excerpt、review_facts 和 evidence 判断；不要只因为检索到了相似中国法证据就认为足够。",
+            "如果 question 明确超出 corpus_scope，或 evidence 与 question/material_excerpt 不匹配，应输出 insufficient。",
+            "不要因为仍有 missing_information 就直接判 insufficient；只要 evidence 足以说明适用规则、义务或边界，就应输出 sufficient，并把事实缺口交给 result_generation 表达。",
+            "如果缺少的是法律依据或场景对应证据，可通过补充检索确认法律边界，应输出 needs_second_retrieval。",
+            "只有材料几乎没有可审查事实、问题库外、或证据明显不支持问题时，才输出 insufficient。",
+            "second_retrieval_plan 的 expanded_queries 必须仍面向 corpus_scope 内语料，不要为库外外国法编造国内法替代查询。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "status 只能是 sufficient、needs_second_retrieval 或 insufficient。",
             "只有 status 为 needs_second_retrieval 时才给 second_retrieval_plan，否则为 null。",
@@ -367,6 +391,8 @@ def run_self_check_with_deepseek(
     facts: ReviewFacts,
     chunks_by_id: dict[str, Chunk],
     *,
+    question: str | None = None,
+    material_text: str | None = None,
     client: OpenAICompatibleClient | None = None,
     max_retries: int | None = None,
     trace_id: str | None = None,
@@ -382,7 +408,14 @@ def run_self_check_with_deepseek(
         max_retries=max_retries,
         trace_id=trace_id,
     )
-    output = node.run(build_evidence_check_messages(hits, facts))
+    output = node.run(
+        build_evidence_check_messages(
+            hits,
+            facts,
+            question=question,
+            material_text=material_text,
+        )
+    )
 
     ids = _QueryIdGenerator()
     plan = None
