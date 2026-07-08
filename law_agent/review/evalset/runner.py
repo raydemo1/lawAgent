@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
+from law_agent.config import RerankMode
 from law_agent.review.evalset.cases import get_default_scenarios
 from law_agent.review.evalset.metrics import aggregate_metrics, evaluate_case
 from law_agent.review.evalset.schemas import (
@@ -32,6 +33,7 @@ RetrievalEvalMode = Literal["service", "local"]
 ReviewEvalMode = Literal["llm", "local"]
 DEFAULT_RETRIEVAL_MODE: RetrievalEvalMode = "service"
 DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
+DEFAULT_RERANK_MODE: RerankMode = "off"
 DEFAULT_MAX_WORKERS = 4
 
 
@@ -42,6 +44,7 @@ def run_evaluation(
     top_k: int = 10,
     retrieval_mode: RetrievalEvalMode = DEFAULT_RETRIEVAL_MODE,
     review_mode: ReviewEvalMode = DEFAULT_REVIEW_MODE,
+    rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> EvalSummary:
     """Run full evaluation across selected modes.
@@ -54,7 +57,7 @@ def run_evaluation(
 
     generated_at = utc_now_iso()
 
-    eval_key = _eval_key(retrieval_mode, review_mode)
+    eval_key = _eval_key(retrieval_mode, review_mode, rerank_mode)
     max_workers = max(1, max_workers)
 
     # Serial service retrieval can reuse adapters. Parallel service retrieval
@@ -82,6 +85,7 @@ def run_evaluation(
                         chunks_path,
                         retrieval_mode=retrieval_mode,
                         review_mode=review_mode,
+                        rerank_mode=rerank_mode,
                         top_k=top_k,
                         service_adapters=service_adapters,
                         service_config=service_config,
@@ -141,6 +145,7 @@ def _run_single_case(
     retrieval_mode: RetrievalEvalMode,
     review_mode: ReviewEvalMode,
     top_k: int,
+    rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     service_adapters: object | None = None,
     service_config: object | None = None,
 ) -> CaseMetricResult:
@@ -171,6 +176,7 @@ def _run_single_case(
                 output_dir=tmp_path,
                 top_k=top_k,
                 review_mode=service_review_mode,
+                rerank_mode=rerank_mode,
                 config=service_config,
                 adapters=service_adapters,
             )
@@ -183,6 +189,7 @@ def _run_single_case(
                 output_dir=tmp_path,
                 top_k=top_k,
                 review_mode=service_review_mode,
+                rerank_mode=rerank_mode,
             )
             hits = trace.final_evidence or trace.hybrid_results
             second_retrieval_triggered = trace.evidence_self_check.second_retrieval_triggered
@@ -208,8 +215,15 @@ def _run_single_case(
         )
 
 
-def _eval_key(retrieval_mode: RetrievalEvalMode, review_mode: ReviewEvalMode) -> str:
-    return f"retrieval={retrieval_mode},review={review_mode}"
+def _eval_key(
+    retrieval_mode: RetrievalEvalMode,
+    review_mode: ReviewEvalMode,
+    rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
+) -> str:
+    base = f"retrieval={retrieval_mode},review={review_mode}"
+    if rerank_mode == "off":
+        return base
+    return f"{base},rerank={rerank_mode}"
 
 
 def format_summary_text(summary: EvalSummary) -> str:

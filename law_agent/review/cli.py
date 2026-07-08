@@ -66,6 +66,7 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
                 output_dir=Path(args.output_dir),
                 top_k=args.top_k,
                 review_mode=args.mode,
+                rerank_mode=args.rerank_mode,
             )
         elif args.hybrid:
             trace = run_hybrid_retrieval(
@@ -74,6 +75,7 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
                 output_dir=Path(args.output_dir),
                 top_k=args.top_k,
                 review_mode=args.mode,
+                rerank_mode=args.rerank_mode,
             )
         else:
             trace = run_keyword_retrieval(
@@ -97,6 +99,8 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
         print(f"Neighbor chunks: {len(trace.neighbor_chunks)}")
         if trace.metadata_boosts:
             print(f"Metadata boosts: {trace.metadata_boosts}")
+        if trace.rerank:
+            print(f"Rerank: {trace.rerank}")
 
         # Evidence self-check status
         check = trace.evidence_self_check
@@ -172,6 +176,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             top_k=args.top_k,
             retrieval_mode=args.retrieval_mode,
             review_mode=args.review_mode,
+            rerank_mode=args.rerank_mode,
             max_workers=args.max_workers,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -337,6 +342,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="rule_baseline",
         help="Review owner mode for hybrid evidence/result nodes.",
     )
+    retrieve.add_argument(
+        "--rerank-mode",
+        choices=["off", "embedding"],
+        default="off",
+        help="Optional post-fusion reranker. Defaults to off.",
+    )
     retrieve.set_defaults(func=_cmd_retrieve)
 
     eval_parser = subparsers.add_parser(
@@ -365,6 +376,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["llm", "local"],
         default="llm",
         help="Review owner for eval. Defaults to llm.",
+    )
+    eval_parser.add_argument(
+        "--rerank-mode",
+        choices=["off", "embedding"],
+        default="off",
+        help="Optional post-fusion reranker for A/B evaluation. Defaults to off.",
     )
     eval_parser.add_argument(
         "--output",

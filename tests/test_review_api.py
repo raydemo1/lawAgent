@@ -276,6 +276,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
         review_mode="llm",
         top_k=10,
         max_workers=4,
+        rerank_mode="off",
         **kwargs,
     ):
         captured["chunks_path"] = chunks_path
@@ -283,6 +284,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
         captured["review_mode"] = review_mode
         captured["top_k"] = top_k
         captured["max_workers"] = max_workers
+        captured["rerank_mode"] = rerank_mode
         from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
 
         metrics = ModeMetrics(
@@ -314,6 +316,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
             "review_mode": "llm",
             "top_k": 7,
             "max_workers": 3,
+            "rerank_mode": "embedding",
         },
     )
 
@@ -323,6 +326,7 @@ def test_eval_run_accepts_retrieval_and_review_modes(
     assert captured["review_mode"] == "llm"
     assert captured["top_k"] == 7
     assert captured["max_workers"] == 3
+    assert captured["rerank_mode"] == "embedding"
     latest = client.get("/api/eval/latest")
     assert latest.status_code == 200
     assert "retrieval=service,review=llm" in latest.json()["mode_metrics"]

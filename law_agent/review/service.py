@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
+from law_agent.config import RerankMode, load_rerank_config
 from law_agent.review.evidence import (
     evaluate_after_second_retrieval,
     run_self_check,
@@ -49,6 +50,7 @@ from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, CorpusError, 
 from law_agent.review.retrieval.fusion import rrf_fuse, source_aware_fuse
 from law_agent.review.retrieval.keyword import KeywordRetriever, merge_hits_by_chunk_id
 from law_agent.review.retrieval.neighbors import expand_neighbors
+from law_agent.review.retrieval.rerank import rerank_hits
 from law_agent.review.retrieval.vector_mock import VectorMockRetriever
 from law_agent.review.schemas import (
     EvidenceSelfCheck,
@@ -303,6 +305,7 @@ def run_hybrid_retrieval(
     top_k: int = DEFAULT_TOP_K,
     max_neighbors: int = DEFAULT_NEIGHBOR_COUNT,
     review_mode: ReviewMode = "rule_baseline",
+    rerank_mode: RerankMode = "off",
     keyword_retriever: KeywordSearchAdapter | None = None,
     vector_retriever: VectorSearchAdapter | None = None,
 ) -> RetrievalTrace:
@@ -324,6 +327,10 @@ def run_hybrid_retrieval(
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
     candidate_top_k = max(top_k, DEFAULT_CANDIDATE_TOP_K)
+    rerank_config = load_rerank_config(mode=rerank_mode)
+    source_fusion_top_k = (
+        max(top_k, rerank_config.window) if rerank_mode != "off" else top_k
+    )
 
     if keyword_retriever is None:
         keyword_retriever = KeywordRetriever(chunks)
@@ -362,9 +369,21 @@ def run_hybrid_retrieval(
     )
     hybrid_hits = source_aware_fuse(
         hybrid_candidates,
-        top_k=top_k,
+        top_k=source_fusion_top_k,
         chunks_by_id=chunks_by_id,
     )
+    rerank_outcome = rerank_hits(
+        hybrid_hits,
+        question=case.question,
+        material_text=case.material.material_text,
+        facts=facts,
+        queries=target_trace.queries,
+        top_k=top_k,
+        mode=rerank_mode,
+        config=rerank_config,
+    )
+    hybrid_hits = rerank_outcome.hits
+    rerank_info: dict[str, object] = {"initial": rerank_outcome.info}
 
     # Expand neighbors for top hits
     neighbor_hits = expand_neighbors(
@@ -389,6 +408,11 @@ def run_hybrid_retrieval(
         plan = self_check.second_retrieval_plan
         expanded_top_k = max(top_k, plan.increased_top_k)
         expanded_candidate_top_k = max(candidate_top_k, expanded_top_k)
+        expanded_source_fusion_top_k = (
+            max(expanded_top_k, rerank_config.window)
+            if rerank_mode != "off"
+            else expanded_top_k
+        )
 
         # Run second retrieval with expanded queries
         all_queries = [
@@ -416,9 +440,21 @@ def run_hybrid_retrieval(
         )
         hybrid2_hits = source_aware_fuse(
             hybrid2_candidates,
-            top_k=expanded_top_k,
+            top_k=expanded_source_fusion_top_k,
             chunks_by_id=chunks_by_id,
         )
+        rerank2_outcome = rerank_hits(
+            hybrid2_hits,
+            question=case.question,
+            material_text=case.material.material_text,
+            facts=facts,
+            queries=list(target_trace.queries) + plan.expanded_queries,
+            top_k=expanded_top_k,
+            mode=rerank_mode,
+            config=rerank_config,
+        )
+        hybrid2_hits = rerank2_outcome.hits
+        rerank_info["second_retrieval"] = rerank2_outcome.info
         neighbor2_hits = expand_neighbors(
             hybrid2_hits[:5], chunks_by_id, max_neighbors=max_neighbors
         )
@@ -452,6 +488,7 @@ def run_hybrid_retrieval(
                 "hybrid_results": hybrid2_hits,
                 "neighbor_chunks": neighbor2_hits,
                 "metadata_boosts": boosts_summary,
+                "rerank": rerank_info,
                 "evidence_self_check": self_check,
                 "second_retrieval": second_retrieval_info,
                 "final_evidence": final_evidence,
@@ -465,6 +502,7 @@ def run_hybrid_retrieval(
                 "hybrid_results": hybrid_hits,
                 "neighbor_chunks": neighbor_hits,
                 "metadata_boosts": boosts_summary,
+                "rerank": rerank_info,
                 "evidence_self_check": self_check,
                 "second_retrieval": second_retrieval_info,
                 "final_evidence": final_evidence,
@@ -533,6 +571,7 @@ def run_service_retrieval(
     top_k: int = DEFAULT_TOP_K,
     max_neighbors: int = DEFAULT_NEIGHBOR_COUNT,
     review_mode: ReviewMode = "rule_baseline",
+    rerank_mode: RerankMode = "off",
     config: "object | None" = None,
     adapters: "object | None" = None,
 ) -> RetrievalTrace:
@@ -569,6 +608,7 @@ def run_service_retrieval(
             top_k=top_k,
             max_neighbors=max_neighbors,
             review_mode=review_mode,
+            rerank_mode=rerank_mode,
             keyword_retriever=adapters.keyword,
             vector_retriever=adapters.vector,
         )

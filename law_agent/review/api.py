@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
+from law_agent.config import RerankMode
 from law_agent.review.evalset.runner import run_evaluation
 from law_agent.review.evalset.runner import ReviewEvalMode, RetrievalEvalMode
 from law_agent.review.evalset.schemas import EvalSummary
@@ -95,6 +96,10 @@ class EvalRunRequest(BaseModel):
         ge=1,
         le=16,
         description="Number of eval cases to run in parallel",
+    )
+    rerank_mode: RerankMode = Field(
+        default="off",
+        description="Optional post-fusion reranker for A/B eval",
     )
 
 
@@ -335,6 +340,7 @@ def create_app(
         review_mode = request.review_mode if request else "llm"
         top_k = request.top_k if request else 10
         max_workers = request.max_workers if request else 4
+        rerank_mode = request.rerank_mode if request else "off"
 
         with app.state.eval_lock:
             if app.state.eval_job["status"] == "running":
@@ -351,7 +357,16 @@ def create_app(
 
         thread = threading.Thread(
             target=_run_eval_job,
-            args=(app, job_id, chunks, retrieval_mode, review_mode, top_k, max_workers),
+            args=(
+                app,
+                job_id,
+                chunks,
+                retrieval_mode,
+                review_mode,
+                top_k,
+                max_workers,
+                rerank_mode,
+            ),
             daemon=True,
         )
         thread.start()
@@ -381,6 +396,7 @@ def _run_eval_job(
     review_mode: ReviewEvalMode,
     top_k: int,
     max_workers: int,
+    rerank_mode: RerankMode,
 ) -> None:
     try:
         summary = run_evaluation(
@@ -388,6 +404,7 @@ def _run_eval_job(
             retrieval_mode=retrieval_mode,
             review_mode=review_mode,
             top_k=top_k,
+            rerank_mode=rerank_mode,
             max_workers=max_workers,
         )
     except Exception as exc:  # noqa: BLE001 - surfaced through job status

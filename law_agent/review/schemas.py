@@ -200,6 +200,7 @@ class RetrievalTrace(StrictModel):
     vector_results: list[RetrievalHit] = Field(default_factory=list)
     hybrid_results: list[RetrievalHit] = Field(default_factory=list)
     neighbor_chunks: list[RetrievalHit] = Field(default_factory=list)
+    rerank: dict[str, object] = Field(default_factory=dict)
     second_retrieval: dict[str, object] = Field(default_factory=dict)
     final_evidence: list[RetrievalHit] = Field(default_factory=list)
     citation_validation: dict[str, object] = Field(default_factory=dict)

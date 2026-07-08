@@ -92,6 +92,7 @@ def require_llm_config() -> LLMConfig:
 # ---------------------------------------------------------------------------
 
 EmbeddingProvider = Literal["openai_compatible", "sentence_transformers", "mock"]
+RerankMode = Literal["off", "embedding"]
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,19 @@ class EmbeddingConfig:
     model: str
     dimension: int
     timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class RerankConfig:
+    """Configuration for optional post-fusion reranking."""
+
+    mode: RerankMode
+    base_url: str
+    api_key: str | None
+    model: str
+    timeout_seconds: int
+    window: int
+    blend_weight: float
 
 
 @dataclass(frozen=True)
@@ -155,6 +169,79 @@ def _load_embedding_config() -> EmbeddingConfig:
         dimension=int(os.getenv("EMBEDDING_DIM", "1536")),
         timeout_seconds=int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "60")),
     )
+
+
+def _default_rerank_model(embedding_model: str) -> str:
+    """Infer the paired reranker for common embedding models."""
+
+    if embedding_model == "BAAI/bge-m3":
+        return "BAAI/bge-reranker-v2-m3"
+    if embedding_model == "Pro/BAAI/bge-m3":
+        return "Pro/BAAI/bge-reranker-v2-m3"
+    return embedding_model
+
+
+def load_rerank_config(*, mode: RerankMode | None = None) -> RerankConfig:
+    """Load optional rerank settings.
+
+    Rerank is off by default. When enabled, it uses the same provider family as
+    embeddings by default, with ``RERANK_*`` variables allowing an explicit
+    override.
+    """
+
+    selected_mode = mode or os.getenv("RERANK_MODE", "off")
+    if selected_mode not in ("off", "embedding"):
+        raise RuntimeError("RERANK_MODE must be off or embedding")
+    if selected_mode == "off":
+        return RerankConfig(
+            mode="off",
+            base_url=os.getenv("RERANK_BASE_URL", "").rstrip("/"),
+            api_key=os.getenv("RERANK_API_KEY") or None,
+            model=os.getenv("RERANK_MODEL", ""),
+            timeout_seconds=int(os.getenv("RERANK_TIMEOUT_SECONDS", "60")),
+            window=int(os.getenv("RERANK_WINDOW", "30")),
+            blend_weight=float(os.getenv("RERANK_BLEND_WEIGHT", "0.4")),
+        )
+
+    embedding = _load_embedding_config()
+    return RerankConfig(
+        mode=selected_mode,  # type: ignore[arg-type]
+        base_url=os.getenv("RERANK_BASE_URL", embedding.base_url).rstrip("/"),
+        api_key=os.getenv("RERANK_API_KEY") or embedding.api_key,
+        model=os.getenv(
+            "RERANK_MODEL",
+            os.getenv(
+                "EMBEDDING_RERANK_MODEL",
+                _default_rerank_model(embedding.model),
+            ),
+        ),
+        timeout_seconds=int(
+            os.getenv("RERANK_TIMEOUT_SECONDS", str(embedding.timeout_seconds))
+        ),
+        window=int(os.getenv("RERANK_WINDOW", "30")),
+        blend_weight=float(os.getenv("RERANK_BLEND_WEIGHT", "0.4")),
+    )
+
+
+def require_rerank_config(*, mode: RerankMode | None = None) -> RerankConfig:
+    """Load rerank settings and fail when enabled but incomplete."""
+
+    config = load_rerank_config(mode=mode)
+    if config.mode == "off":
+        return config
+    if not config.base_url:
+        raise RuntimeError("RERANK_BASE_URL is required when rerank is enabled")
+    if not config.api_key:
+        raise RuntimeError(
+            "RERANK_API_KEY or EMBEDDING_API_KEY is required when rerank is enabled"
+        )
+    if not config.model:
+        raise RuntimeError("RERANK_MODEL is required when rerank is enabled")
+    if config.window < 1:
+        raise RuntimeError("RERANK_WINDOW must be >= 1")
+    if not 0.0 <= config.blend_weight <= 1.0:
+        raise RuntimeError("RERANK_BLEND_WEIGHT must be between 0 and 1")
+    return config
 
 
 def load_service_config() -> ServiceConfig:
