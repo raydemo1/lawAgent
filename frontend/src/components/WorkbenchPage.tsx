@@ -24,6 +24,7 @@ import type {
   ReviewFacts,
 } from '../types/api';
 import { isReviewFailedResponse } from '../types/api';
+import { validateUploadFile } from '../api/client';
 import RiskBadge from './RiskBadge';
 
 export interface WorkbenchPageProps {
@@ -130,6 +131,9 @@ export default function WorkbenchPage({
   // Selected file state — file is submitted directly with the review,
   // not pre-extracted. The backend saves it as part of the review case.
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // Inline validation error for the file picker (unsupported type / empty /
+  // oversized). Surfaced locally so upload mistakes never become a trace.
+  const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Submit is allowed when not loading and there's a question plus
@@ -156,6 +160,20 @@ export default function WorkbenchPage({
     (e: ChangeEvent<HTMLInputElement>): void => {
       const file = e.target.files?.[0];
       if (!file) return;
+      // Validate locally before accepting the file: unsupported types,
+      // empty files, and oversized files are rejected at the picker so
+      // they can never trigger a network round-trip or a failed trace.
+      try {
+        validateUploadFile(file);
+      } catch (err) {
+        setFileError(err instanceof Error ? err.message : '文件校验失败');
+        setSelectedFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        return;
+      }
+      setFileError(null);
       setSelectedFile(file);
     },
     [],
@@ -163,6 +181,7 @@ export default function WorkbenchPage({
 
   const handleRemoveFile = useCallback((): void => {
     setSelectedFile(null);
+    setFileError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -224,7 +243,7 @@ export default function WorkbenchPage({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.pdf,.docx,.html,.htm,.json"
+                accept=".txt,.md,.markdown,.pdf,.docx,.html,.htm,.json"
                 onChange={handleFileChange}
                 disabled={loading}
                 style={{ display: 'none' }}
@@ -246,6 +265,19 @@ export default function WorkbenchPage({
               </button>
             </div>
           </div>
+          {fileError && (
+            <div
+              style={{
+                fontSize: '0.75rem',
+                color: 'var(--color-danger)',
+                marginBottom: '6px',
+                marginTop: '-2px',
+              }}
+              role="alert"
+            >
+              {fileError}
+            </div>
+          )}
           <textarea
             id="wb-material"
             className="workbench__textarea"

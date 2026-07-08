@@ -10,7 +10,7 @@ import subprocess
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from html import escape
+from html import escape, unescape
 from io import BytesIO
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -21,10 +21,38 @@ from law_agent.data.schemas import Document, DocumentSection, IngestMeta, Source
 
 
 HTML_TAG_RE = re.compile(r"<[^>]+>")
+SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+BLOCK_CLOSE_RE = re.compile(r"</(p|div|tr|li|h[1-6]|ul|ol|table)\s*>", re.IGNORECASE)
+BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+CELL_OPEN_RE = re.compile(r"<(td|th)[^>]*>", re.IGNORECASE)
+CELL_CLOSE_RE = re.compile(r"</(td|th)\s*>", re.IGNORECASE)
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 ParserEngine = Literal["auto", "plain", "docx", "docling", "mineru"]
 DOC_PARSER_FORMATS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 DEFAULT_DOCLING_ARTIFACTS_PATH = Path("artifacts/models/docling")
+
+
+def _html_to_text(raw: str) -> str:
+    """Convert HTML to readable text while preserving table structure.
+
+    Drops ``<script>``/``<style>`` blocks (which otherwise leak CSS/JS noise
+    into the extracted text), inserts newlines for block-level closers, turns
+    table cells into ``|``-separated columns, then strips remaining tags and
+    unescapes entities. This keeps tables and lists readable for downstream
+    chunking instead of concatenating all cell text into one run.
+    """
+    raw = SCRIPT_STYLE_RE.sub("", raw)
+    raw = BR_RE.sub("\n", raw)
+    raw = BLOCK_CLOSE_RE.sub("\n", raw)
+    # Opening cell tag -> "" , closing cell tag -> " | " so a row becomes
+    # "A | B | C | " (clean single pipes) rather than " | A | | B | ".
+    raw = CELL_OPEN_RE.sub("", raw)
+    raw = CELL_CLOSE_RE.sub(" | ", raw)
+    raw = HTML_TAG_RE.sub("", raw)
+    raw = unescape(raw)
+    raw = re.sub(r"[ \t]+", " ", raw)
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+    return raw.strip()
 
 
 @dataclass(frozen=True)
@@ -66,7 +94,7 @@ def _read_text(
         return ParsedText(_docx_to_text(path.read_bytes()), "docx_parser", "0.1.0")
     if suffix in {".html", ".htm"}:
         raw = path.read_text(encoding="utf-8", errors="replace")
-        return ParsedText(HTML_TAG_RE.sub("", raw), "html_text_parser", "0.1.0")
+        return ParsedText(_html_to_text(raw), "html_text_parser", "0.1.0")
     if suffix in DOC_PARSER_FORMATS:
         return _docling_to_text(path)
     return ParsedText(path.read_text(encoding="utf-8", errors="replace"), "plain_text_parser", "0.1.0")
@@ -75,7 +103,10 @@ def _read_text(
 def _docling_to_text(path: Path) -> ParsedText:
     try:
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            TableStructureV2Options,
+        )
         from docling.document_converter import DocumentConverter, PdfFormatOption
     except ImportError as exc:
         raise RuntimeError(
@@ -84,21 +115,71 @@ def _docling_to_text(path: Path) -> ParsedText:
         ) from exc
     ocr_engine = _docling_ocr_engine()
     artifacts_path = _docling_artifacts_path(ocr_engine=ocr_engine)
+    # Use TableFormerV2 explicitly. docling's default table_structure_options
+    # is TableStructureOptions (V1), which expects the legacy
+    # ``docling-project--docling-models/model_artifacts/tableformer`` layout.
+    # TableFormerV2 (``docling-project--TableFormerV2``) is the current model
+    # and the one we ship in the artifacts directory.
     pipeline_options = PdfPipelineOptions(
         artifacts_path=artifacts_path,
         do_ocr=True,
         ocr_options=_docling_ocr_options(ocr_engine),
         do_table_structure=_docling_tableformer_available(artifacts_path),
+        table_structure_options=TableStructureV2Options(),
     )
     converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
     )
-    result = converter.convert(str(path))
+
+    # Docling's converter is configured for the PDF pipeline only. Standalone
+    # images (.png/.jpg/...) would otherwise be routed to the IMAGE format,
+    # which tries to download a HuggingFace layout model — that fails offline
+    # with LocalEntryNotFoundError. Wrap images into a single-page PDF so they
+    # go through the working PDF + OCR pipeline instead.
+    convert_target = path
+    image_suffixes = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+    temp_pdf: Path | None = None
+    if path.suffix.lower() in image_suffixes:
+        convert_target, temp_pdf = _wrap_image_as_pdf(path)
+
+    try:
+        result = converter.convert(str(convert_target))
+    finally:
+        if temp_pdf is not None and temp_pdf.exists():
+            temp_pdf.unlink()
     return ParsedText(
         text=result.document.export_to_markdown(),
         parser="docling_parser",
         parser_version=_package_version("docling"),
     )
+
+
+def _wrap_image_as_pdf(path: Path) -> tuple[Path, Path]:
+    """Wrap a raster image into a single-page PDF so Docling's PDF pipeline
+    (with OCR) can process it. Returns (pdf_path, temp_pdf_to_clean_up).
+
+    Raises RuntimeError if Pillow is unavailable or the image cannot be read.
+    """
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError(
+            "Parsing image files requires Pillow: `pip install Pillow`."
+        ) from exc
+    try:
+        img = Image.open(path)
+        # Flatten onto white so transparency/alpha does not break PDF export.
+        if img.mode in ("RGBA", "LA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            background.paste(img, mask=img.convert("RGBA").split()[-1])
+            img = background
+        else:
+            img = img.convert("RGB")
+        temp_pdf = path.with_suffix(path.suffix + ".pdf")
+        img.save(str(temp_pdf), format="PDF", resolution=200.0)
+        return temp_pdf, temp_pdf
+    except Exception as exc:
+        raise RuntimeError(f"无法将图片 {path.name} 转换为 PDF 以供解析：{exc}") from exc
 
 
 def _docling_ocr_engine() -> str:
@@ -188,14 +269,34 @@ def _docling_rapidocr_available(artifacts_path: Path) -> bool:
 
 
 def _docling_tableformer_available(artifacts_path: Path | None) -> bool:
+    """Check whether the TableFormer model is available locally.
+
+    docling >= 2.x ships TableFormerV2 (repo ``docling-project/TableFormerV2``,
+    local folder ``docling-project--TableFormerV2``) which supersedes the
+    legacy ``docling-project--docling-models/model_artifacts/tableformer``
+    layout. We check the new path first and fall back to the legacy path so
+    the function stays compatible with both docling versions.
+    """
     if artifacts_path is None:
         return False
-    tableformer_root = artifacts_path / "docling-project--docling-models" / "model_artifacts" / "tableformer"
-    required = [
-        tableformer_root / "fast" / "tm_config.json",
-        tableformer_root / "fast" / "tableformer_fast.safetensors",
+
+    # docling >= 2.x: TableFormerV2 (safetensors + tokenizer + config)
+    v2_root = artifacts_path / "docling-project--TableFormerV2"
+    v2_required = [
+        v2_root / "model.safetensors",
+        v2_root / "config.json",
+        v2_root / "tokenizer.json",
     ]
-    return all(path.exists() for path in required)
+    if all(path.exists() for path in v2_required):
+        return True
+
+    # Legacy: docling-project--docling-models (old TableFormer fast variant)
+    legacy_root = artifacts_path / "docling-project--docling-models" / "model_artifacts" / "tableformer"
+    legacy_required = [
+        legacy_root / "fast" / "tm_config.json",
+        legacy_root / "fast" / "tableformer_fast.safetensors",
+    ]
+    return all(path.exists() for path in legacy_required)
 
 
 def _mineru_to_text(path: Path, parser_output_dir: Path | None = None) -> ParsedText:

@@ -372,8 +372,8 @@ function CaseRow({ item }: { item: CaseMetricResult }): JSX.Element {
           }`}
           title={
             item.second_retrieval_triggered
-              ? '系统触发了二次检索（事实记录，不计坏例）'
-              : '系统未触发二次检索（事实记录，不计坏例）'
+              ? '系统触发了二次检索'
+              : '系统未触发二次检索'
           }
         >
           {item.second_retrieval_triggered ? '已触发' : '未触发'}
@@ -430,9 +430,6 @@ function CaseRow({ item }: { item: CaseMetricResult }): JSX.Element {
                 }}
               >
                 {item.second_retrieval_triggered ? '已触发' : '未触发'}
-                <span style={{ color: '#94a3b8', marginLeft: 4 }}>
-                  （事实记录，不计坏例）
-                </span>
               </div>
             </div>
           </div>
@@ -785,7 +782,6 @@ export default function EvalPage(): JSX.Element {
             <div className="section-title">用例明细</div>
             <p className="eval-section-hint">
               点击任意用例展开实际命中来源、缺失来源与坏例原因。
-              「二次」列为事实记录（已触发 / 未触发），仅作诊断，不影响坏例判定。
             </p>
             <div className="case-row case-row--head">
               <span className="case-row__toggle" aria-hidden="true" />

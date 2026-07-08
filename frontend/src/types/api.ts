@@ -300,7 +300,7 @@ export interface CaseMetricResult {
   duplicate_source_count_at_10: number;
   citation_violation_count: number;
   abstention_correct: boolean;
-  /** 事实记录：是否触发了二次检索（诊断指标，不计坏例）。 */
+  /** 是否触发了二次检索。 */
   second_retrieval_triggered: boolean;
   /** Source IDs actually retrieved by the system. */
   actual_sources: string[];

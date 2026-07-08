@@ -51,6 +51,63 @@ from law_agent.review.service import (
 
 RetrievalBackend = Literal["local", "service"]
 
+# Upload guardrails. The frontend mirrors these so that network/upload
+# failures are intercepted before they can become a "trace" — a parsing
+# failure must surface as a clear 422 error, not a ReviewFailedResponse.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+ALLOWED_UPLOAD_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".pdf", ".docx",
+    ".html", ".htm", ".json",
+}
+
+
+def _file_parse_hint(filename: str, exc: BaseException) -> str:
+    """Turn a low-level parsing error into a clear, actionable message.
+
+    File parsing failures must never be reported as a successful-but-failed
+    review trace. The user needs to know *why* the document could not be
+    parsed so they can fix the input (re-save, OCR, switch format, etc.).
+    """
+    message = str(exc).strip() or exc.__class__.__name__
+    lower = message.lower()
+    suffix = Path(filename).suffix.lower()
+    if "Docling parser requires" in message or "docling parser requires" in lower:
+        return (
+            f"无法使用 Docling 解析 {filename}：未安装 docling 或模型文件缺失。"
+            "请改用 .txt/.md/.docx 等可解析格式，或安装 docling 后重试。"
+        )
+    if "MinerU parser" in message or "mineru" in lower:
+        return (
+            f"无法使用 MinerU 解析 {filename}：未安装 mineru CLI。"
+            "请改用其他格式或安装 mineru 后重试。"
+        )
+    if "non-zip" in lower:
+        return (
+            f"{filename} 不是有效的 DOCX 文件（ZIP 头校验失败），"
+            "可能是旧版 .doc 或损坏文件，请另存为 .docx 后重试。"
+        )
+    if "转换为 pdf" in message or "转换为 PDF" in message:
+        return (
+            f"{filename} 无法解析：图片转 PDF 失败（{message}）。"
+            "请确认图片未损坏，或直接提供 PDF 文档。"
+        )
+    if suffix in {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}:
+        # Docling could not even load the document — usually a corrupt,
+        # empty, or password-protected file (NOT an OCR-quality issue).
+        if "could not load document" in lower or "data format error" in lower \
+                or "conversion failed" in lower or "is not valid" in lower:
+            return (
+                f"{filename} 无法加载：文件为空、损坏或受密码保护。"
+                "请确认文件可正常打开后重新上传。"
+            )
+        # OCR ran but produced nothing usable — scanned doc with poor quality.
+        if "ocr" in lower:
+            return (
+                f"{filename} 解析后未提取到有效文本，可能是扫描件且 OCR 识别失败。"
+                "请提供可选择文本的文档，或提升扫描清晰度后重试。"
+            )
+    return f"无法解析文件 {filename}：{message}"
+
 
 # ---------------------------------------------------------------------------
 # Request / Response models
@@ -236,22 +293,88 @@ def create_app(
             try:
                 if file is not None and file.filename:
                     # --- File upload mode ---
+                    # Guardrails: reject unsupported types / oversized / empty
+                    # files BEFORE attempting to parse, so upload mistakes
+                    # surface as a clear 422 error instead of a review trace.
+                    filename = Path(file.filename).name
+                    suffix = Path(filename).suffix.lower()
+                    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "unsupported_file_type",
+                                "filename": filename,
+                                "message": (
+                                    f"不支持的文件类型 {suffix or '（无后缀）'}。"
+                                    "支持：.txt .md .pdf .docx .html .json"
+                                ),
+                            },
+                        )
+
                     raw = await file.read()
                     if not raw:
                         raise HTTPException(
-                            status_code=400, detail="uploaded file is empty"
+                            status_code=422,
+                            detail={
+                                "code": "empty_file",
+                                "filename": filename,
+                                "message": f"文件 {filename} 为空，无法解析。",
+                            },
+                        )
+                    if len(raw) > MAX_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "file_too_large",
+                                "filename": filename,
+                                "size": len(raw),
+                                "limit": MAX_UPLOAD_BYTES,
+                                "message": (
+                                    f"文件 {filename} 大小 {len(raw) / 1024 / 1024:.1f} MB "
+                                    f"超过上限 {MAX_UPLOAD_BYTES / 1024 / 1024:.0f} MB。"
+                                ),
+                            },
                         )
 
                     # Save the file to the review run directory
                     uploads_dir = tmp_path / "uploads"
                     uploads_dir.mkdir(exist_ok=True)
-                    saved_path = uploads_dir / Path(file.filename).name
+                    saved_path = uploads_dir / filename
                     saved_path.write_bytes(raw)
 
-                    # Convert file to MaterialRecord (docling extraction)
+                    # Convert file to MaterialRecord (docling extraction).
+                    # File parsing failures must surface as a clear 422 error,
+                    # NOT as a ReviewFailedResponse "trace" — the user needs
+                    # to know the document could not be parsed.
                     from law_agent.review.materials import material_from_file
 
-                    material_record = material_from_file(saved_path)
+                    try:
+                        material_record = material_from_file(saved_path)
+                    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "file_parse_failed",
+                                "filename": filename,
+                                "message": _file_parse_hint(filename, exc),
+                            },
+                        )
+
+                    # Reject empty extraction results (e.g. scanned PDF with
+                    # no OCR text) — never pretend a parse failure is success.
+                    if not material_record.material_text or not material_record.material_text.strip():
+                        raise HTTPException(
+                            status_code=422,
+                            detail={
+                                "code": "empty_extraction",
+                                "filename": filename,
+                                "message": (
+                                    f"{filename} 解析后未提取到任何文本内容，"
+                                    "可能是扫描件、图片型 PDF 或加密文档。"
+                                    "请提供可选择文本的文档。"
+                                ),
+                            },
+                        )
 
                     # Create review case with the material record
                     response = create_review_case(

@@ -40,6 +40,53 @@ const API_BASE_URL: string =
 /** Default request timeout in milliseconds (30s). */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Upload guardrails — mirror the backend so upload failures are intercepted
+ *  in the browser before they can become a network "trace". */
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
+export const ALLOWED_UPLOAD_SUFFIXES = [
+  '.txt', '.md', '.markdown', '.pdf', '.docx', '.html', '.htm', '.json',
+] as const;
+
+/**
+ * Validate an uploaded file before sending it to the backend.
+ *
+ * Catches unsupported file types, oversized files, and empty files so that
+ * these mistakes surface as a clear, local error message instead of a failed
+ * review trace or an opaque network error.
+ *
+ * @throws {ApiError} status 422 when the file fails validation.
+ */
+export function validateUploadFile(file: File): void {
+  const name = file.name || 'unknown';
+  const lowerName = name.toLowerCase();
+  const dotIndex = lowerName.lastIndexOf('.');
+  const dotSuffix = dotIndex >= 0 ? lowerName.slice(dotIndex) : '';
+  if (!ALLOWED_UPLOAD_SUFFIXES.some((s) => lowerName.endsWith(s))) {
+    throw new ApiError(
+      422,
+      `不支持的文件类型 ${dotSuffix || '（无后缀）'}。支持：.txt .md .pdf .docx .html .json`,
+      '/api/review',
+      { code: 'unsupported_file_type', filename: name },
+    );
+  }
+  if (file.size === 0) {
+    throw new ApiError(
+      422,
+      `文件 ${name} 为空，无法解析。`,
+      '/api/review',
+      { code: 'empty_file', filename: name },
+    );
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new ApiError(
+      422,
+      `文件 ${name} 大小 ${(file.size / 1024 / 1024).toFixed(1)} MB 超过上限 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB。`,
+      '/api/review',
+      { code: 'file_too_large', filename: name, size: file.size, limit: MAX_UPLOAD_BYTES },
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
@@ -110,6 +157,25 @@ function detailToString(detail: unknown): string {
   } catch {
     return String(detail);
   }
+}
+
+/**
+ * Extract a human-readable message from a structured FastAPI error detail.
+ *
+ * The backend returns `{"detail": {"code": "...", "message": "..."}}` for
+ * file parse / upload errors. This helper pulls out the `message` so the
+ * user sees a clear Chinese description of what went wrong (e.g. "无法解析
+ * 文件 report.pdf：...") instead of a raw JSON dump.
+ */
+function extractStructuredErrorMessage(detail: unknown): string | null {
+  if (!detail || typeof detail !== 'object') return null;
+  // FastAPI wraps the payload as { detail: {...} } — handle both shapes.
+  const inner = (detail as { detail?: unknown }).detail ?? detail;
+  if (inner && typeof inner === 'object') {
+    const message = (inner as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+  }
+  return null;
 }
 
 /**
@@ -224,6 +290,13 @@ export async function submitReview(
     );
   }
 
+  // Intercept upload mistakes locally so they never become a network
+  // "trace": unsupported types, empty files, and oversized files are
+  // reported before the request is sent.
+  if (file) {
+    validateUploadFile(file);
+  }
+
   const url = buildUrl('/api/review');
   const controller = new AbortController();
   const timeoutId = setTimeout(
@@ -257,11 +330,15 @@ export async function submitReview(
     }
   } catch (err) {
     clearTimeout(timeoutId);
+    // Network / connection failure: give a clear, actionable message
+    // rather than letting it look like a review trace.
+    const reason = err instanceof Error ? err.message : String(err);
+    const aborted = controller.signal.aborted;
     throw new ApiError(
       0,
-      err instanceof Error
-        ? `Network error submitting review: ${err.message}`
-        : 'Network error submitting review',
+      aborted
+        ? `请求超时或被中断：${reason}。请检查网络后重试，或缩小文档体积。`
+        : `无法连接到审查服务（网络错误）：${reason}。请确认后端服务已启动并重试。`,
       '/api/review',
       null,
     );
@@ -275,12 +352,17 @@ export async function submitReview(
     } catch {
       // Non-JSON error response
     }
+    // Prefer the backend's structured message for file parse / upload
+    // errors so the user sees exactly what went wrong.
+    const message = extractStructuredErrorMessage(detail);
     const detailStr = detailToString(detail);
     throw new ApiError(
       response.status,
-      detailStr
-        ? `Review failed (${response.status}): ${detailStr}`
-        : `Review failed (${response.status})`,
+      message
+        ? message
+        : detailStr
+          ? `Review failed (${response.status}): ${detailStr}`
+          : `Review failed (${response.status})`,
       '/api/review',
       detail,
     );
