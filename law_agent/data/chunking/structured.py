@@ -20,7 +20,17 @@ TABLE_RE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
 ROW_RE = re.compile(r"<tr\b.*?</tr>", re.IGNORECASE | re.DOTALL)
 CELL_RE = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.IGNORECASE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
-DECORATIVE_TABLE_LINE_RE = re.compile(r"^\|[-:\s]+\|?$")
+DECORATIVE_TABLE_LINE_RE = re.compile(r"^\|[-:| \t]+\|?$")
+# Markdown table: a header row, a separator row (|---|---|), and 1+ data rows.
+# Each row starts and ends with `|`. The separator row only contains `-`, `:`, `|`, spaces.
+MARKDOWN_TABLE_RE = re.compile(
+    r"(?:^[ \t]*\|[^\n]*\|[ \t]*\n)"            # header row
+    r"(?:[ \t]*\|[-:| \t]+\|[ \t]*\n)"          # separator row
+    r"(?:[ \t]*\|[^\n]*\|[ \t]*\n?)+",          # 1+ data rows
+    re.MULTILINE,
+)
+MARKDOWN_TABLE_ROW_RE = re.compile(r"^[ \t]*\|[^\n]*\|[ \t]*$", re.MULTILINE)
+MARKDOWN_TABLE_SEP_RE = re.compile(r"^[ \t]*\|[-:| \t]+\|[ \t]*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,17 @@ def split_faq_units(text: str) -> list[StructuredUnit]:
 
 
 def split_table_aware_units(text: str) -> list[StructuredUnit]:
+    """Split text that contains tables (HTML or markdown) into chunks.
+
+    Markdown tables (produced by docling/TableFormerV2) are converted to HTML
+    so the existing HTML table chunking logic can handle them. This preserves
+    row-level structure instead of letting tables be split mid-row by the
+    generic 480-char splitter.
+    """
+    # Convert markdown tables to HTML so the existing table chunking logic
+    # (which expects <table><tr><td>) handles them uniformly.
+    text = _markdown_tables_to_html(text)
+
     units: list[StructuredUnit] = []
     cursor = 0
     table_index = 0
@@ -100,36 +121,101 @@ def split_table_aware_units(text: str) -> list[StructuredUnit]:
     return _merge_tiny_units(units)
 
 
+def _markdown_tables_to_html(text: str) -> str:
+    """Convert markdown tables to HTML <table> blocks.
+
+    A markdown table has a header row, a separator row (|---|---|), and 1+
+    data rows. Each cell is the text between `|` delimiters. The separator
+    row is dropped. Empty cells are preserved as `<td></td>` so column
+    alignment is retained (important for "数据类别" columns that are sometimes
+    blank in the source documents).
+    """
+    def replacer(match: re.Match[str]) -> str:
+        table_text = match.group(0)
+        rows: list[list[str]] = []
+        for line in table_text.splitlines():
+            stripped = line.strip()
+            if not stripped or MARKDOWN_TABLE_SEP_RE.match(stripped):
+                continue
+            # Split on `|`, drop the first/last empty parts (from leading/trailing `|`)
+            parts = stripped.split("|")
+            if len(parts) >= 2 and parts[0].strip() == "" and parts[-1].strip() == "":
+                parts = parts[1:-1]
+            cells = [_strip_tags(p.strip()) for p in parts]
+            rows.append(cells)
+        if len(rows) < 2:
+            return table_text  # not a real table, leave as-is
+        html_rows = []
+        for row in rows:
+            tag = "th" if row is rows[0] else "td"
+            html_rows.append(
+                "<tr>" + "".join(f"<{tag}>{c}</{tag}>" for c in row) + "</tr>"
+            )
+        return "<table>" + "".join(html_rows) + "</table>"
+
+    return MARKDOWN_TABLE_RE.sub(replacer, text)
+
+
 def split_table_units(table_html: str, heading_path: list[str]) -> list[StructuredUnit]:
+    """Split an HTML table into chunks, preserving row-level context.
+
+    The first row (header) is prepended to each chunk that starts a new
+    buffer, so that every chunk is self-contained: a retrieval hit on any
+    table chunk shows the column headers alongside the data rows. This is
+    critical for negative-list tables where "数据类别" (重要数据/个人信息)
+    must stay associated with its data sub-rows.
+    """
     rows = [_table_row_text(row.group(0)) for row in ROW_RE.finditer(table_html)]
     rows = [row for row in rows if row]
     if not rows:
         return split_plain_units(_strip_tags(table_html), heading_path)
 
+    # First row is the header — keep it so we can prepend it to each chunk
+    # for context. If the table has no header (rare), treat all rows as data.
+    header = rows[0] if rows else ""
+    data_rows = rows[1:] if len(rows) > 1 else rows
+    if not data_rows:
+        return [
+            StructuredUnit(
+                text=header,
+                heading_path=heading_path,
+                citation_label=" ".join(heading_path),
+            )
+        ]
+
     units: list[StructuredUnit] = []
     current: list[str] = []
 
-    def flush() -> None:
+    def flush(is_first_chunk: bool) -> None:
         nonlocal current
-        if current:
-            units.append(
-                StructuredUnit(
-                    text="\n".join(current),
-                    heading_path=heading_path,
-                    citation_label=" ".join(heading_path),
-                )
+        if not current:
+            return
+        # Prepend header to every chunk so column context is always present.
+        # This solves the "表头重复 8 次但行级断裂" problem: instead of
+        # the header being a separate noise row, it now serves as context.
+        chunk_rows = current if is_first_chunk else [header, *current]
+        units.append(
+            StructuredUnit(
+                text="\n".join(chunk_rows),
+                heading_path=heading_path,
+                citation_label=" ".join(heading_path),
             )
-            current = []
+        )
+        current = []
 
-    for row in rows:
-        if current and len("\n".join([*current, row])) > GENERIC_HARD_LIMIT_CHARS:
-            flush()
+    is_first = True
+    for row in data_rows:
+        projected_len = len("\n".join([header, *current, row])) if current else len(row)
+        if current and projected_len > GENERIC_HARD_LIMIT_CHARS:
+            flush(is_first)
+            is_first = False
         if len(row) > GENERIC_HARD_LIMIT_CHARS:
-            flush()
+            flush(is_first)
+            is_first = False
             units.extend(_split_long_text(row, heading_path, " ".join(heading_path)))
             continue
         current.append(row)
-    flush()
+    flush(is_first)
     return units
 
 
@@ -178,12 +264,30 @@ def split_plain_units(text: str, heading_path: list[str]) -> list[StructuredUnit
     return _split_long_text("\n".join(_meaningful_lines(_strip_tags(text))), heading_path, None)
 
 
+def _is_decorative_table_shard(text: str) -> bool:
+    """Detect pipe-prefixed decoration shards split off from wide tables.
+
+    docling sometimes emits table header/separator lines (e.g.
+    ``| 个人信息保护政策模版``, ``| 判定规则``, ``|\\n|``) that are too short
+    to carry retrieval value on their own and cannot be merged into adjacent
+    chunks. Drop them so they don't pollute the chunk index.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("|"):
+        return False
+    return len(stripped) < 30
+
+
 def _chunks_from_units(document: Document, units: list[StructuredUnit]) -> list[Chunk]:
     chunks: list[Chunk] = []
     citation_role = citation_role_for_source(document.source_id)
     clause_citable = can_cite_clause(document.source_id)
 
-    for index, unit in enumerate(unit for unit in units if unit.text.strip()):
+    kept_units = [
+        unit for unit in units
+        if unit.text.strip() and not _is_decorative_table_shard(unit.text)
+    ]
+    for index, unit in enumerate(kept_units):
         heading_path = [document.title, *unit.heading_path]
         citation_label = unit.citation_label
         if citation_label:
@@ -244,7 +348,18 @@ def _meaningful_lines(text: str) -> list[str]:
 
 
 def _looks_table_heavy(text: str) -> bool:
-    return "<table" in text.lower() or text.count("<tr") >= 3
+    """Return True if the text contains HTML or markdown tables.
+
+    Markdown tables are detected by the presence of a separator row
+    (``|---|---|``) followed by at least one data row. This catches
+    tables produced by docling/TableFormerV2 which export as markdown.
+    """
+    if "<table" in text.lower() or text.count("<tr") >= 3:
+        return True
+    # Markdown table: separator row + at least 2 other `|`-delimited rows
+    sep_count = len(MARKDOWN_TABLE_SEP_RE.findall(text))
+    row_count = len(MARKDOWN_TABLE_ROW_RE.findall(text))
+    return sep_count >= 1 and row_count >= 3
 
 
 def _heading_from_line(line: str) -> tuple[int, str] | None:
