@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import time
 from typing import Literal
 
 from law_agent.config import RerankMode, load_rerank_config
@@ -60,6 +61,7 @@ from law_agent.review.schemas import (
     RetrievalQuery,
     RetrievalTrace,
 )
+from law_agent.review.telemetry import current_telemetry, reset_telemetry
 
 DEFAULT_REVIEW_RUNS_DIR = Path("data/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
@@ -95,6 +97,8 @@ def create_review_case(
     issues.
     """
 
+    reset_telemetry()
+    started = time.perf_counter()
     question = _validate_non_blank(question, "question")
     if material is None:
         if material_text is None:
@@ -119,6 +123,8 @@ def create_review_case(
 
     facts = facts_extractor(material.material_text, question)
     queries: list[RetrievalQuery] = query_planner(question, facts, material.material_text)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    telemetry = current_telemetry()
 
     result = ReviewResult(
         review_result_id=review_result_id,
@@ -143,6 +149,10 @@ def create_review_case(
         created_at=created_at,
         evidence_self_check=EvidenceSelfCheck(status="not_checked"),
         queries=queries,
+        latency_ms=elapsed_ms,
+        total_latency_ms=elapsed_ms,
+        llm_call_count=telemetry.llm_call_count,
+        retry_count=telemetry.retry_count,
     )
 
     case_path = review_cases_path(output_dir)
@@ -311,6 +321,7 @@ def run_hybrid_retrieval(
     ``KeywordRetriever`` and ``VectorMockRetriever`` are used.
     """
 
+    total_started = time.perf_counter()
     case, target_trace, traces = _load_case_and_trace(case_id, output_dir)
     facts = case.review_facts
 
@@ -326,6 +337,8 @@ def run_hybrid_retrieval(
         keyword_retriever = KeywordRetriever(chunks)
     if vector_retriever is None:
         vector_retriever = VectorMockRetriever(chunks)
+
+    retrieval_started = time.perf_counter()
 
     # Run both retrievers per query and merge
     keyword_hits_per_query: list[list[RetrievalHit]] = []
@@ -505,12 +518,7 @@ def run_hybrid_retrieval(
             }
         )
 
-    # Rewrite traces file
-    updated_traces = [
-        updated_trace if t.trace_id == target_trace.trace_id else t
-        for t in traces
-    ]
-    write_retrieval_traces(retrieval_traces_path(output_dir), updated_traces)
+    retrieval_latency_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
     # Issue 8: Build governed review result
     if review_mode == "llm":
@@ -552,7 +560,28 @@ def run_hybrid_retrieval(
         updated_results = [review_result]
     write_review_results(results_path, updated_results)
 
-    return updated_trace
+    workflow_latency_ms = int((time.perf_counter() - total_started) * 1000)
+    total_latency_ms = (target_trace.total_latency_ms or 0) + workflow_latency_ms
+    telemetry = current_telemetry()
+    final_trace = updated_trace.model_copy(
+        update={
+            "latency_ms": total_latency_ms,
+            "total_latency_ms": total_latency_ms,
+            "retrieval_latency_ms": retrieval_latency_ms,
+            "llm_call_count": telemetry.llm_call_count,
+            "retry_count": telemetry.retry_count,
+        }
+    )
+
+    # Rewrite traces file after result generation so telemetry includes the
+    # full workflow, including final LLM result generation when enabled.
+    final_traces = [
+        final_trace if t.trace_id == target_trace.trace_id else t
+        for t in traces
+    ]
+    write_retrieval_traces(retrieval_traces_path(output_dir), final_traces)
+
+    return final_trace
 
 
 # ---------------------------------------------------------------------------

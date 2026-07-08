@@ -282,6 +282,10 @@ def aggregate_metrics(
             mean_duplicate_source_count_at_10=0.0,
             abstention_accuracy=0.0,
             second_retrieval_trigger_rate=0.0,
+            mean_total_latency_ms=None,
+            mean_retrieval_latency_ms=None,
+            total_llm_calls=0,
+            total_retries=0,
             total_citation_violations=0,
             bad_case_count=0,
             bad_case_taxonomy={},
@@ -305,6 +309,16 @@ def aggregate_metrics(
     second_retrieval_fired = sum(
         1 for c in case_results if c.second_retrieval_triggered
     )
+    total_latencies = [
+        c.total_latency_ms for c in case_results if c.total_latency_ms is not None
+    ]
+    retrieval_latencies = [
+        c.retrieval_latency_ms
+        for c in case_results
+        if c.retrieval_latency_ms is not None
+    ]
+    total_llm_calls = sum(c.llm_call_count for c in case_results)
+    total_retries = sum(c.retry_count for c in case_results)
 
     total_violations = sum(c.citation_violation_count for c in case_results)
     bad_count = sum(1 for c in case_results if c.is_bad_case)
@@ -324,6 +338,18 @@ def aggregate_metrics(
         mean_duplicate_source_count_at_10=round(mean_duplicate_sources_10, 4),
         abstention_accuracy=round(abstention_correct / total, 4),
         second_retrieval_trigger_rate=round(second_retrieval_fired / total, 4),
+        mean_total_latency_ms=(
+            round(sum(total_latencies) / len(total_latencies), 2)
+            if total_latencies
+            else None
+        ),
+        mean_retrieval_latency_ms=(
+            round(sum(retrieval_latencies) / len(retrieval_latencies), 2)
+            if retrieval_latencies
+            else None
+        ),
+        total_llm_calls=total_llm_calls,
+        total_retries=total_retries,
         total_citation_violations=total_violations,
         bad_case_count=bad_count,
         bad_case_taxonomy=dict(sorted(taxonomy.items())),

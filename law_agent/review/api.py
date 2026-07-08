@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from law_agent.config import RerankMode
+from law_agent.config import RerankMode, load_llm_config, load_service_config
 from law_agent.review.evalset.cases import EvalSuite
 from law_agent.review.evalset.runner import run_evaluation
 from law_agent.review.evalset.runner import ReviewEvalMode, RetrievalEvalMode
@@ -142,6 +142,9 @@ class HealthResponse(BaseModel):
     """Response body for GET /api/health."""
 
     status: str = "ok"
+    llm: dict[str, Any] = Field(default_factory=dict)
+    services: dict[str, Any] = Field(default_factory=dict)
+    corpus: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvalRunRequest(BaseModel):
@@ -293,7 +296,50 @@ def create_app(
     async def health_check() -> HealthResponse:
         """Health check endpoint."""
 
-        return HealthResponse(status="ok")
+        llm_config = load_llm_config()
+        llm_status = {
+            "configured": llm_config.enabled,
+            "reachable": llm_config.enabled,
+            "model": llm_config.model,
+            "base_url": llm_config.base_url,
+        }
+
+        services: dict[str, Any] = {}
+        try:
+            from law_agent.review.retrieval.service_backends import healthcheck
+
+            services = healthcheck(load_service_config())
+        except Exception as exc:  # noqa: BLE001 - health must be non-fatal
+            services = {
+                "elasticsearch": False,
+                "postgres": False,
+                "error": str(exc),
+            }
+
+        chunks_path = Path(app.state.chunks_path)
+        corpus = {
+            "chunks_path": str(chunks_path),
+            "chunks_file_exists": chunks_path.exists(),
+            "indexed_count": {
+                "elasticsearch_docs": services.get("elasticsearch_docs", 0),
+                "pgvector_rows": services.get("pgvector_rows", 0),
+            },
+        }
+
+        status = "ok"
+        if app.state.retrieval_backend == "service" and not (
+            services.get("elasticsearch") and services.get("postgres")
+        ):
+            status = "degraded"
+        if not llm_config.enabled:
+            status = "degraded"
+
+        return HealthResponse(
+            status=status,
+            llm=llm_status,
+            services=services,
+            corpus=corpus,
+        )
 
     @app.post("/api/review", response_model=ReviewResponse)
     async def run_review(

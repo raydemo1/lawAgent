@@ -9,6 +9,7 @@ from typing import Generic, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
+from law_agent.review.telemetry import record_llm_call, record_retry
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -102,6 +103,7 @@ class StructuredLLMNode(Generic[ModelT]):
 
         for attempt in range(1, attempts_allowed + 1):
             try:
+                record_llm_call()
                 raw = self.client.chat_json(
                     list(messages),
                     output_model=self.output_model,
@@ -133,6 +135,7 @@ class StructuredLLMNode(Generic[ModelT]):
                         attempts=attempt,
                         trace_id=self.trace_id,
                     ) from exc
+                record_retry()
             except Exception as exc:
                 last_reason = "llm_api_error"
                 last_message = f"{self.node_name} LLM call failed: {exc}"
@@ -155,6 +158,7 @@ class StructuredLLMNode(Generic[ModelT]):
                         attempts=attempt,
                         trace_id=self.trace_id,
                     ) from exc
+                record_retry()
 
         raise ReviewWorkflowFailed(
             failed_node=self.node_name,

@@ -65,6 +65,10 @@ class CaseMetricResult(StrictModel):
     # Fact only: did the pipeline trigger second retrieval? No expectation
     # comparison, no bad-case weight — purely diagnostic.
     second_retrieval_triggered: bool = False
+    total_latency_ms: int | None = None
+    retrieval_latency_ms: int | None = None
+    llm_call_count: int = 0
+    retry_count: int = 0
     actual_sources: list[str] = Field(default_factory=list)
     missing_sources: list[str] = Field(default_factory=list)
     is_bad_case: bool = False
@@ -90,6 +94,10 @@ class ModeMetrics(StrictModel):
     abstention_accuracy: float
     # Diagnostic only: fraction of cases where second retrieval fired.
     second_retrieval_trigger_rate: float = 0.0
+    mean_total_latency_ms: float | None = None
+    mean_retrieval_latency_ms: float | None = None
+    total_llm_calls: int = 0
+    total_retries: int = 0
     total_citation_violations: int
     bad_case_count: int
     bad_case_taxonomy: dict[str, int] = Field(default_factory=dict)

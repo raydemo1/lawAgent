@@ -382,6 +382,10 @@ def test_aggregate_metrics_calculates_means() -> None:
             duplicate_source_count_at_10=0,
             citation_violation_count=0, abstention_correct=True,
             second_retrieval_triggered=True,
+            total_latency_ms=100,
+            retrieval_latency_ms=40,
+            llm_call_count=2,
+            retry_count=0,
         ),
         CaseMetricResult(
             case_id="c2", recall_at_3=0.5, recall_at_5=0.5, mrr_at_10=0.5,
@@ -389,6 +393,10 @@ def test_aggregate_metrics_calculates_means() -> None:
             duplicate_source_count_at_10=2,
             citation_violation_count=1, abstention_correct=False,
             second_retrieval_triggered=False, is_bad_case=True,
+            total_latency_ms=300,
+            retrieval_latency_ms=80,
+            llm_call_count=4,
+            retry_count=1,
             bad_reasons=["test"], bad_case_categories=["abstention_error"],
         ),
     ]
@@ -404,6 +412,10 @@ def test_aggregate_metrics_calculates_means() -> None:
     assert metrics.mean_duplicate_source_count_at_10 == 1.0
     assert metrics.abstention_accuracy == 0.5
     assert metrics.second_retrieval_trigger_rate == 0.5
+    assert metrics.mean_total_latency_ms == 200.0
+    assert metrics.mean_retrieval_latency_ms == 60.0
+    assert metrics.total_llm_calls == 6
+    assert metrics.total_retries == 1
     assert metrics.total_citation_violations == 1
     assert metrics.bad_case_count == 1
     assert metrics.bad_case_taxonomy == {"abstention_error": 1}
@@ -461,6 +473,8 @@ def test_run_evaluation_with_fixture_corpus(tmp_path) -> None:
     key = "retrieval=local,review=local"
     assert key in summary.mode_metrics
     assert summary.mode_metrics[key].total_cases == 2
+    assert summary.mode_metrics[key].mean_total_latency_ms is not None
+    assert summary.mode_metrics[key].mean_retrieval_latency_ms is not None
     assert summary.cases_path == "custom"
 
 
@@ -480,6 +494,10 @@ def test_format_summary_text_contains_key_metrics() -> None:
                 mean_mrr_at_10=0.9000,
                 abstention_accuracy=1.0,
                 second_retrieval_trigger_rate=0.5,
+                mean_total_latency_ms=123.4,
+                mean_retrieval_latency_ms=45.6,
+                total_llm_calls=8,
+                total_retries=1,
                 total_citation_violations=0,
                 bad_case_count=1,
                 total_cases=10,
@@ -493,4 +511,6 @@ def test_format_summary_text_contains_key_metrics() -> None:
     assert "Recall@3" in text
     assert "MRR@10" in text
     assert "Candidate Recall@50" in text
+    assert "Mean total latency" in text
+    assert "LLM calls / retries" in text
     assert "Bad cases" in text

@@ -34,6 +34,42 @@ def client(fixture_corpus: Path) -> TestClient:
     return TestClient(app)
 
 
+def test_health_reports_services_corpus_and_llm(
+    fixture_corpus: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "sk-test")
+
+    def fake_healthcheck(_config):
+        return {
+            "elasticsearch": True,
+            "postgres": True,
+            "elasticsearch_index": "lawagent_chunks",
+            "elasticsearch_docs": 6,
+            "pgvector_table": "lawagent_chunks",
+            "pgvector_rows": 6,
+        }
+
+    monkeypatch.setattr(
+        "law_agent.review.retrieval.service_backends.healthcheck",
+        fake_healthcheck,
+    )
+
+    app = create_app(chunks_path=fixture_corpus, retrieval_backend="service")
+    response = TestClient(app).get("/api/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["llm"]["configured"] is True
+    assert data["services"]["elasticsearch"] is True
+    assert data["services"]["postgres"] is True
+    assert data["corpus"]["indexed_count"] == {
+        "elasticsearch_docs": 6,
+        "pgvector_rows": 6,
+    }
+
+
 # ---------------------------------------------------------------------------
 # POST /api/review
 # ---------------------------------------------------------------------------

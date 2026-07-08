@@ -205,6 +205,10 @@ class RetrievalTrace(StrictModel):
     final_evidence: list[RetrievalHit] = Field(default_factory=list)
     citation_validation: dict[str, object] = Field(default_factory=dict)
     latency_ms: int | None = None
+    total_latency_ms: int | None = None
+    retrieval_latency_ms: int | None = None
+    llm_call_count: int = 0
+    retry_count: int = 0
 
 
 class ReviewRunResponse(StrictModel):

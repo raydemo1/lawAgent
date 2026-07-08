@@ -2,7 +2,7 @@
 
 LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。
 
-项目文档只保留长期维护入口：本文件记录日常开发、运行和项目流程；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言；[docs/data-governance-design.md](docs/data-governance-design.md) 记录数据治理设计；[docs/adr](docs/adr) 记录稳定架构决策。
+项目文档只保留长期维护入口：本文件记录日常开发、运行和项目流程；[docs/RUNBOOK.md](docs/RUNBOOK.md) 是一键启动与评测 runbook；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言；[docs/data-governance-design.md](docs/data-governance-design.md) 记录数据治理设计；[docs/adr](docs/adr) 记录稳定架构决策。
 
 ## 开发命令
 

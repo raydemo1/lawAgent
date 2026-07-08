@@ -596,12 +596,22 @@ def index_corpus_to_services(
 def healthcheck(config: ServiceConfig) -> dict[str, Any]:
     """Probe ES and pgvector reachability for the gated integration test."""
 
-    result: dict[str, Any] = {"elasticsearch": False, "postgres": False}
+    result: dict[str, Any] = {
+        "elasticsearch": False,
+        "postgres": False,
+        "elasticsearch_index": config.elasticsearch.index_name,
+        "elasticsearch_docs": 0,
+        "pgvector_table": config.postgres.table_name,
+        "pgvector_rows": 0,
+    }
     client = None
     try:
         client = create_elasticsearch_client(config)
         info = client.info()
         result["elasticsearch"] = bool(info.get("version", {}).get("number"))
+        if client.indices.exists(index=config.elasticsearch.index_name):
+            count = client.count(index=config.elasticsearch.index_name)
+            result["elasticsearch_docs"] = int(count.get("count", 0))
     except Exception as exc:  # noqa: BLE001
         result["elasticsearch_error"] = str(exc)
     finally:
@@ -615,6 +625,17 @@ def healthcheck(config: ServiceConfig) -> dict[str, Any]:
         conn = create_postgres_connection(config)
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
+            table_name = _validate_pg_identifier(
+                config.postgres.table_name, field_name="PG_TABLE"
+            )
+            cur.execute(
+                "SELECT to_regclass(%s)",
+                (table_name,),
+            )
+            exists = cur.fetchone()[0] is not None
+            if exists:
+                cur.execute(f"SELECT count(*) FROM {table_name}")
+                result["pgvector_rows"] = int(cur.fetchone()[0])
         result["postgres"] = True
     except Exception as exc:  # noqa: BLE001
         result["postgres_error"] = str(exc)

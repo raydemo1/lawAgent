@@ -24,6 +24,7 @@ from law_agent.review.result_builder import (
 )
 from law_agent.review.schemas import ReviewFacts
 from law_agent.review.schemas import EvidenceSelfCheck
+from law_agent.review.telemetry import current_telemetry, reset_telemetry
 
 from tests.test_review_result_builder import _hit
 
@@ -104,6 +105,7 @@ def test_result_prompt_contains_json_example() -> None:
 
 
 def test_structured_node_retries_validation_failure() -> None:
+    reset_telemetry()
     client = FakeClient(outputs=[{"extra": "bad"}, _valid_facts_payload()])
     node = StructuredLLMNode(
         node_name="fact_extraction",
@@ -120,6 +122,9 @@ def test_structured_node_retries_validation_failure() -> None:
     assert client.kwargs[0]["output_model"] is ReviewFacts
     assert client.kwargs[0]["tool_name"] == "fact_extraction"
     assert "validation_errors=" in client.calls[1][-1].content
+    telemetry = current_telemetry()
+    assert telemetry.llm_call_count == 2
+    assert telemetry.retry_count == 1
 
 
 def test_strict_tool_argument_loader_repairs_malformed_json() -> None:

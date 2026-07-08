@@ -207,13 +207,21 @@ def _run_single_case(
                 risk_level = result.risk_level
                 citation_groups = result.applicable_evidence
 
-        return evaluate_case(
+        case_metrics = evaluate_case(
             scenario,
             hits,
             candidate_hits=[*trace.keyword_results, *trace.vector_results],
             risk_level=risk_level,
             second_retrieval_triggered=second_retrieval_triggered,
             citation_groups=citation_groups,
+        )
+        return case_metrics.model_copy(
+            update={
+                "total_latency_ms": trace.total_latency_ms,
+                "retrieval_latency_ms": trace.retrieval_latency_ms,
+                "llm_call_count": trace.llm_call_count,
+                "retry_count": trace.retry_count,
+            }
         )
 
 
@@ -253,6 +261,13 @@ def format_summary_text(summary: EvalSummary) -> str:
         lines.append(f"  Duplicate src@10:   {metrics.mean_duplicate_source_count_at_10:.4f}")
         lines.append(f"  Abstention accuracy: {metrics.abstention_accuracy:.4f}")
         lines.append(f"  Second retrieval trigger rate: {metrics.second_retrieval_trigger_rate:.4f}")
+        if metrics.mean_total_latency_ms is not None:
+            lines.append(f"  Mean total latency: {metrics.mean_total_latency_ms:.2f} ms")
+        if metrics.mean_retrieval_latency_ms is not None:
+            lines.append(
+                f"  Mean retrieval latency: {metrics.mean_retrieval_latency_ms:.2f} ms"
+            )
+        lines.append(f"  LLM calls / retries: {metrics.total_llm_calls} / {metrics.total_retries}")
         lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
         if metrics.bad_case_taxonomy:
