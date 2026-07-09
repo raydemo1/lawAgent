@@ -27,6 +27,7 @@ import { isReviewFailedResponse } from '../types/api';
 import { validateUploadFile } from '../api/client';
 import RiskBadge from './RiskBadge';
 import GroundedClaims from './GroundedClaims';
+import MarkdownText from './MarkdownText';
 
 export interface WorkbenchPageProps {
   /** Current review question (controlled). */
@@ -253,12 +254,10 @@ export default function WorkbenchPage({
               />
               <button
                 type="button"
-                className="btn-secondary"
+                className="case-header__action-btn"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={loading}
                 style={{
-                  fontSize: '0.75rem',
-                  padding: '4px 12px',
                   opacity: loading ? 0.6 : 1,
                   cursor: loading ? 'not-allowed' : 'pointer',
                 }}
@@ -300,7 +299,7 @@ export default function WorkbenchPage({
         >
           <button
             type="button"
-            className="btn-primary"
+            className="case-header__action-btn case-header__action-btn--accent"
             onClick={handleSubmit}
             disabled={!canSubmit}
           >
@@ -422,9 +421,7 @@ export default function WorkbenchPage({
               >
                 审查结论
               </div>
-              <p style={{ fontSize: '0.9375rem', lineHeight: 1.6 }}>
-                {reviewResult.conclusion}
-              </p>
+              <MarkdownText variant="report">{reviewResult.conclusion}</MarkdownText>
               <GroundedClaims
                 claims={reviewResult.claims}
                 evidenceChunks={evidenceChunks}
@@ -466,7 +463,7 @@ export default function WorkbenchPage({
               <ol className="action-list">
                 {reviewResult.recommended_actions.map((action, idx) => (
                   <li className="action-list__item" key={idx}>
-                    {action}
+                    <MarkdownText variant="note">{action}</MarkdownText>
                   </li>
                 ))}
               </ol>
@@ -486,7 +483,7 @@ export default function WorkbenchPage({
               >
                 {reviewResult.risk_boundaries.map((boundary, idx) => (
                   <div className="warning-note" key={idx}>
-                    {boundary}
+                    <MarkdownText variant="note">{boundary}</MarkdownText>
                   </div>
                 ))}
               </div>

@@ -18,7 +18,7 @@
  */
 
 import { useMemo } from 'react';
-import type { CitationGroup, RetrievalHit, ReviewApiResponse, ReviewFacts } from '../types/api';
+import type { CitationGroup, CitationUsage, RetrievalHit, ReviewApiResponse, ReviewFacts } from '../types/api';
 import { isReviewFailedResponse } from '../types/api';
 import type { CitationVerdict, SavedCase } from '../types/case';
 import { setCitationVerdict } from '../store/caseStore';
@@ -26,6 +26,7 @@ import RiskBadge from './RiskBadge';
 import CitationList from './CitationList';
 import FeedbackPanel from './FeedbackPanel';
 import GroundedClaims, { cssId } from './GroundedClaims';
+import MarkdownText from './MarkdownText';
 import { downloadHtml, downloadMarkdown } from '../utils/report';
 import {
   EVIDENCE_ISSUE_LABELS,
@@ -117,13 +118,13 @@ function CaseHeader({ saved, onBack, onRerun }: CaseHeaderProps): JSX.Element {
           ← 返回工作台
         </button>
         <div className="case-header__actions">
-          <button type="button" className="btn-secondary" onClick={onRerun}>
+          <button type="button" className="case-header__action-btn" onClick={onRerun}>
             以此为模板重审
           </button>
-          <button type="button" className="btn-secondary" onClick={() => downloadMarkdown(saved)}>
+          <button type="button" className="case-header__action-btn" onClick={() => downloadMarkdown(saved)}>
             导出 Markdown
           </button>
-          <button type="button" className="btn-primary" onClick={() => downloadHtml(saved)}>
+          <button type="button" className="case-header__action-btn case-header__action-btn--accent" onClick={() => downloadHtml(saved)}>
             导出 HTML 报告
           </button>
         </div>
@@ -231,7 +232,10 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
                 ) : null}
               </span>
             </div>
-            <h2 className="report-title">{result.conclusion}</h2>
+            <div className="section-title">审查结论</div>
+            <MarkdownText variant="report" className="case-conclusion__body">
+              {result.conclusion}
+            </MarkdownText>
             <GroundedClaims
               claims={result.claims}
               evidenceChunks={evidenceChunks}
@@ -335,14 +339,16 @@ function ReportSection({
       {ordered ? (
         <ol className={className}>
           {items.map((item, i) => (
-            <li className="action-list__item" key={i}>{item}</li>
+            <li className="action-list__item" key={i}>
+              <MarkdownText variant="note">{item}</MarkdownText>
+            </li>
           ))}
         </ol>
       ) : (
         <div className={className}>
           {items.map((item, i) => (
             <div className={tone === 'warning' ? 'warning-note' : undefined} key={i}>
-              {item}
+              <MarkdownText variant="note">{item}</MarkdownText>
             </div>
           ))}
         </div>
@@ -469,6 +475,10 @@ function EvidenceSidebar({
     })),
   );
 
+  // Split into legal basis (citable) vs auxiliary (non-citable) groups.
+  const legalCitations = citations.filter((c) => c.can_cite_clause);
+  const auxCitations = citations.filter((c) => !c.can_cite_clause);
+
   return (
     <aside className="evidence-sidebar" aria-label="引用依据">
       <div className="evidence-sidebar__head">
@@ -479,29 +489,70 @@ function EvidenceSidebar({
         <div className="state-block__hint">暂无可引用依据。</div>
       ) : (
         <div className="evidence-sidebar__list">
-          {citations.map((item, index) => (
-            <article
-              className="evidence-card"
-              id={`evidence-${cssId(item.chunk_id)}`}
-              key={item.chunk_id}
-            >
-              <div className="evidence-card__top">
-                <span className="evidence-card__index">[{shortId(item.chunk_id)}]</span>
-                <span className="evidence-card__usage">{USAGE_LABELS[item.groupUsage]}</span>
-              </div>
-              <div className="evidence-card__title">
-                {index + 1}. {item.citation_label ?? item.title}
-              </div>
-              {item.chunk ? (
-                <p className="evidence-card__text">{item.chunk.text}</p>
-              ) : (
-                <p className="evidence-card__muted">该证据正文不可用。</p>
-              )}
-            </article>
-          ))}
+          {legalCitations.length > 0 && (
+            <div className="evidence-sidebar__group evidence-sidebar__group--primary">
+              <div className="evidence-sidebar__group-title">法律依据</div>
+              {legalCitations.map((item, index) => (
+                <EvidenceCard
+                  key={item.chunk_id}
+                  item={item}
+                  index={index}
+                />
+              ))}
+            </div>
+          )}
+          {auxCitations.length > 0 && (
+            <div className="evidence-sidebar__group evidence-sidebar__group--auxiliary">
+              <div className="evidence-sidebar__group-title">辅助证据</div>
+              {auxCitations.map((item, index) => (
+                <EvidenceCard
+                  key={item.chunk_id}
+                  item={item}
+                  index={index}
+                  auxiliary
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </aside>
+  );
+}
+
+function EvidenceCard({
+  item,
+  index,
+  auxiliary = false,
+}: {
+  item: {
+    chunk_id: string;
+    citation_label: string | null;
+    title: string;
+    groupUsage: CitationUsage;
+    chunk?: RetrievalHit;
+  };
+  index: number;
+  auxiliary?: boolean;
+}): JSX.Element {
+  return (
+    <article
+      className={'evidence-card' + (auxiliary ? ' evidence-card--aux' : '')}
+      id={`evidence-${cssId(item.chunk_id)}`}
+    >
+      <div className="evidence-card__top">
+        <span className="evidence-card__index">[{shortId(item.chunk_id)}]</span>
+        <span className="evidence-card__usage">{USAGE_LABELS[item.groupUsage]}</span>
+      </div>
+      <div className="evidence-card__title">
+        {index + 1}. {item.citation_label ?? item.title}
+      </div>
+      {item.chunk ? (
+        <p className="evidence-card__text">{item.chunk.text}</p>
+      ) : (
+        <p className="evidence-card__muted">该证据正文不可用。</p>
+      )}
+    </article>
   );
 }
 

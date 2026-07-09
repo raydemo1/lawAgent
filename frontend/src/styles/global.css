@@ -1186,6 +1186,10 @@ textarea {
 
 .history-item__delete {
   flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-left: 1px solid var(--color-border);
   background: transparent;
@@ -1195,6 +1199,7 @@ textarea {
   font-size: 1rem;
   line-height: 1;
   transition: background var(--transition-fast), color var(--transition-fast);
+  min-width: 36px;
 }
 .history-item__delete:hover {
   background: rgba(185, 28, 28, 0.08);
@@ -1480,21 +1485,63 @@ textarea {
   margin-bottom: var(--space-sm);
 }
 
+.case-header__back {
+  color: #64748b;
+  font-weight: 500;
+}
+.case-header__back:hover {
+  color: #334155;
+  text-decoration: none;
+}
+
 .case-header__actions {
   display: flex;
   gap: var(--space-sm);
   flex-wrap: wrap;
+  align-items: center;
 }
-.case-header__actions .btn-primary,
-.case-header__actions .btn-secondary {
-  padding: 0.5rem var(--space-md);
+
+.case-header__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-weight: 500;
   font-size: 0.8125rem;
+  line-height: 1.4;
+  border: 1px solid #e2e8f0;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast);
+  white-space: nowrap;
+  user-select: none;
+}
+.case-header__action-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.case-header__action-btn--accent {
+  color: #b45309;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+.case-header__action-btn--accent:hover {
+  background: rgba(217, 119, 6, 0.06);
+  border-color: rgba(217, 119, 6, 0.5);
+  color: #92400e;
 }
 
 .case-header__title {
-  font-size: 1.5rem;
-  line-height: 1.3;
+  font-size: 1.125rem;
+  line-height: 1.45;
   margin-bottom: var(--space-sm);
+  color: var(--color-foreground);
 }
 
 .case-header__meta {
@@ -1688,6 +1735,294 @@ textarea {
   .grounded-claim__refs {
     justify-content: flex-start;
   }
+}
+
+/* ============================================================
+ * Inline citation markers (①②③) in conclusion text
+ * ============================================================ */
+.cite-marker {
+  display: inline-block;
+  margin-left: 0.125rem;
+  padding: 0 0.25rem;
+  color: var(--color-primary);
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  vertical-align: super;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.cite-marker:hover {
+  color: #ffffff;
+  background: var(--color-primary);
+  border-radius: 999px;
+}
+
+/* ============================================================
+ * Citation cards — authoritative legal article excerpts shown
+ * below the conclusion. Serif typography + navy accents evoke
+ * the gravitas of statute quotation.
+ * ============================================================ */
+.cite-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+}
+
+.cite-cards--compact {
+  margin-top: var(--space-md);
+}
+
+/* Header — "引用条款" with double-rule underline (gazette style) */
+.cite-cards__header {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  letter-spacing: 0.04em;
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  border-bottom: 3px double var(--color-primary);
+}
+
+/* Card container — statute excerpt feel */
+.cite-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.25rem 1fr;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-xl) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: box-shadow 200ms ease, border-color 200ms ease, transform 200ms ease;
+}
+
+/* Top decorative rule — partial navy line (official document feel) */
+.cite-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 2px;
+  background: var(--color-primary);
+}
+
+.cite-card:hover {
+  border-left-color: var(--color-secondary);
+  box-shadow: 0 4px 12px rgba(30, 58, 138, 0.10);
+  transform: translateY(-1px);
+}
+
+.cite-card:target {
+  border-left-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(180, 81, 9, 0.15);
+}
+
+/* Badge — seal-style: solid navy disc with thin outer ring */
+.cite-card__badge {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 3px var(--color-primary);
+}
+
+.cite-card__body {
+  min-width: 0;
+}
+
+/* Title — statute heading, authoritative serif */
+.cite-card__title {
+  font-family: var(--font-heading);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  margin-bottom: var(--space-sm);
+  font-feature-settings: "liga" 1, "kern" 1;
+}
+
+/* Quoted text — large opening quote mark, warm background, serif body */
+.cite-card__text {
+  position: relative;
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-md) var(--space-lg) var(--space-md) var(--space-xl);
+  border-left: 3px solid var(--color-primary);
+  background: #fdfbf6;
+  font-family: var(--font-heading);
+  font-size: 0.9375rem;
+  line-height: 1.85;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* Large decorative opening quote (left double quotation mark) */
+.cite-card__text::before {
+  content: '\201C';
+  position: absolute;
+  top: 0.125rem;
+  left: 0.5rem;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  opacity: 0.22;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.cite-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.75rem;
+  color: #64748b;
+  padding-top: var(--space-xs);
+}
+
+.cite-card__source {
+  color: #475569;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Article number — seal-style chip */
+.cite-card__article {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: rgba(180, 81, 9, 0.06);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  letter-spacing: 0.02em;
+}
+
+.cite-card__link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-primary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 150ms ease;
+}
+
+.cite-card__link::before {
+  content: '\2191';
+  font-size: 0.875rem;
+}
+
+.cite-card__link:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.cite-card__extras {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.cite-card__extras-label {
+  font-weight: 500;
+  margin-right: var(--space-xs);
+}
+
+.cite-card__extra {
+  display: inline-block;
+  margin-right: var(--space-xs);
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.6875rem;
+  color: #475569;
+}
+
+@media (max-width: 640px) {
+  .cite-card {
+    grid-template-columns: 1fr;
+    padding: var(--space-md);
+  }
+
+  .cite-card__badge {
+    justify-self: start;
+  }
+
+  .cite-card__text {
+    padding-left: var(--space-lg);
+  }
+
+  .cite-card__text::before {
+    font-size: 2rem;
+    left: 0.25rem;
+  }
+}
+
+/* ============================================================
+ * Evidence sidebar — grouped legal basis vs auxiliary
+ * ============================================================ */
+.evidence-sidebar__group {
+  margin-bottom: var(--space-lg);
+}
+
+.evidence-sidebar__group--auxiliary {
+  opacity: 0.85;
+}
+
+.evidence-sidebar__group-title {
+  font-family: var(--font-heading);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.evidence-sidebar__group--auxiliary .evidence-sidebar__group-title {
+  color: #64748b;
+}
+
+.evidence-card--aux {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.evidence-card--aux .evidence-card__title {
+  color: #475569;
+}
+
+.evidence-card--aux .evidence-card__text {
+  color: #64748b;
 }
 
 /* ============================================================
@@ -2962,4 +3297,139 @@ textarea {
   .case-row__head {
     min-width: 720px;
   }
+}
+
+/* ---------- Markdown body (legal report content) ----------
+   Renders LLM-generated conclusion / claims / risk_boundaries markdown.
+   Plain text (rule builder) renders identically to a plain span. */
+.markdown-body {
+  font-family: var(--font-body);
+  color: var(--color-foreground);
+  line-height: 1.7;
+  word-break: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* report variant: conclusion 主体 */
+.markdown-body--report {
+  font-size: 0.9375rem;
+}
+.markdown-body--report p {
+  margin: 0 0 var(--space-sm);
+}
+.markdown-body--report h3 {
+  margin: var(--space-md) 0 var(--space-xs);
+  font-family: var(--font-heading);
+  font-size: 1.0625rem;
+  font-weight: 800;
+  color: var(--color-primary);
+  letter-spacing: 0;
+}
+.markdown-body--report h4 {
+  margin: var(--space-sm) 0 var(--space-xs);
+  font-family: var(--font-heading);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--color-foreground);
+}
+.markdown-body--report ul,
+.markdown-body--report ol {
+  margin: 0 0 var(--space-sm);
+  padding-left: 1.25rem;
+}
+.markdown-body--report ul {
+  list-style: disc;
+}
+.markdown-body--report ol {
+  list-style: decimal;
+}
+.markdown-body--report li {
+  margin: 2px 0;
+}
+.markdown-body--report li > p {
+  margin: 0;
+}
+
+/* inline variant: claim.text 单行加粗 */
+.markdown-body--inline {
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+/* note variant: risk_boundaries / recommended_actions 单条 */
+.markdown-body--note {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* shared inline emphasis — 沿用 grounded-claim__emphasis 配色 */
+.markdown-body strong {
+  color: #0f172a;
+  font-weight: 800;
+}
+.markdown-body em {
+  font-style: italic;
+  color: var(--color-foreground);
+}
+.markdown-body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: rgba(30, 58, 138, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.markdown-body a {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+/* GFM tables */
+.markdown-body--report table {
+  width: 100%;
+  margin: 0 0 var(--space-sm);
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.markdown-body--report th,
+.markdown-body--report td {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-body--report th {
+  background: rgba(30, 58, 138, 0.05);
+  font-weight: 700;
+  color: var(--color-foreground);
+}
+.markdown-body--report tr:nth-child(even) td {
+  background: rgba(248, 250, 252, 0.5);
+}
+
+/* blockquote — 风险提示/注意 */
+.markdown-body--report blockquote {
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-left: 3px solid var(--color-accent);
+  background: rgba(180, 83, 9, 0.04);
+  color: #475569;
+}
+.markdown-body--report blockquote > :first-child {
+  margin-top: 0;
+}
+.markdown-body--report blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* horizontal rule */
+.markdown-body--report hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-md) 0;
 }

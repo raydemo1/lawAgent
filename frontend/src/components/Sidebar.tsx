@@ -196,7 +196,7 @@ export default function Sidebar({
                     <div className="history-item__top">
                       <span className={RISK_DOT_CLASS[risk] ?? RISK_DOT_CLASS.insufficient_evidence} aria-hidden="true" />
                       <span className="history-item__question">
-                        {truncate(c.question, 28)}
+                        {truncate(c.question, 36)}
                       </span>
                     </div>
                     <div className="history-item__meta">

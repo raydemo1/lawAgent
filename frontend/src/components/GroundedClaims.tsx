@@ -8,6 +8,8 @@ interface GroundedClaimsProps {
   compact?: boolean;
 }
 
+const CIRCLED_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+
 export default function GroundedClaims({
   claims,
   evidenceChunks,
@@ -22,68 +24,65 @@ export default function GroundedClaims({
   if (!claims || claims.length === 0) return null;
 
   return (
-    <div className={'grounded-claims' + (compact ? ' grounded-claims--compact' : '')}>
-      {claims.map((claim, index) => (
-        <article className="grounded-claim" key={`${claim.text}-${index}`}>
-          <div className="grounded-claim__text">
-            <span className="grounded-claim__index">{index + 1}</span>
-            <span>
-              <HighlightedClaimText text={claim.text} />
-              {claim.supporting_chunk_ids.map((chunkId) => {
-                const chunk = chunkMap.get(chunkId);
-                return (
-                  <a
-                    className="grounded-claim__marker"
-                    href={`#evidence-${cssId(chunkId)}`}
-                    title={chunk ? `${chunk.title} · ${chunk.chunk_id}` : chunkId}
-                    key={chunkId}
-                  >
-                    [{shortId(chunkId)}]
-                  </a>
-                );
-              })}
-            </span>
-          </div>
-          <div className="grounded-claim__refs" aria-label="支持该结论的证据 chunk">
-            {claim.supporting_chunk_ids.map((chunkId) => {
-              const chunk = chunkMap.get(chunkId);
-              return (
-                <span
-                  className="grounded-claim__ref"
-                  title={chunk ? `${chunk.title} · ${chunk.chunk_id}` : chunkId}
-                  key={chunkId}
-                >
-                  {chunk ? shortId(chunk.chunk_id) : shortId(chunkId)}
+    <div className={'cite-cards' + (compact ? ' cite-cards--compact' : '')}>
+      <div className="cite-cards__header">引用条款</div>
+      {claims.map((claim, index) => {
+        const marker = CIRCLED_NUMBERS[index] ?? String(index + 1);
+        // Show the first supporting chunk as the primary cited article.
+        const primaryChunkId = claim.supporting_chunk_ids[0];
+        const chunk = primaryChunkId ? chunkMap.get(primaryChunkId) : undefined;
+        const extraChunks = claim.supporting_chunk_ids
+          .slice(1)
+          .map((id) => chunkMap.get(id))
+          .filter((c): c is RetrievalHit => c !== undefined);
+
+        return (
+          <article
+            className="cite-card"
+            key={`${claim.text}-${index}`}
+            id={`cite-card-${index}`}
+          >
+            <div className="cite-card__badge">{marker}</div>
+            <div className="cite-card__body">
+              <div className="cite-card__title">
+                {chunk?.citation_label || chunk?.title || '引用条款'}
+              </div>
+              {chunk && (
+                <blockquote className="cite-card__text">
+                  {chunk.text}
+                </blockquote>
+              )}
+              <div className="cite-card__meta">
+                <span className="cite-card__source">
+                  {chunk?.title || '未知来源'}
                 </span>
-              );
-            })}
-          </div>
-        </article>
-      ))}
+                {chunk?.article_no && (
+                  <span className="cite-card__article">{chunk.article_no}</span>
+                )}
+                <a
+                  className="cite-card__link"
+                  href={`#cite-marker-${index}`}
+                  title="跳转到正文引用位置"
+                >
+                  回到正文
+                </a>
+              </div>
+              {extraChunks.length > 0 && (
+                <div className="cite-card__extras">
+                  <span className="cite-card__extras-label">同时引用：</span>
+                  {extraChunks.map((c) => (
+                    <span className="cite-card__extra" key={c.chunk_id}>
+                      {c.citation_label || c.title}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
-}
-
-function HighlightedClaimText({ text }: { text: string }): JSX.Element {
-  const pattern = /(《[^》]+》第[一二三四五六七八九十百零〇\d]+(?:条|款|项)|数据出境安全评估|个人信息出境标准合同|个人信息保护认证|单独同意)/g;
-  const parts = text.split(pattern);
-  return (
-    <>
-      {parts.map((part, index) =>
-        isHighlightTerm(part) ? (
-          <strong className="grounded-claim__emphasis" key={`${part}-${index}`}>
-            {part}
-          </strong>
-        ) : (
-          <span key={`${part}-${index}`}>{part}</span>
-        ),
-      )}
-    </>
-  );
-}
-
-function isHighlightTerm(value: string): boolean {
-  return /^(《[^》]+》第[一二三四五六七八九十百零〇\d]+(?:条|款|项)|数据出境安全评估|个人信息出境标准合同|个人信息保护认证|单独同意)$/.test(value);
 }
 
 export function cssId(value: string): string {

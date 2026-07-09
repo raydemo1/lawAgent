@@ -191,6 +191,12 @@ export interface RetrievalHit {
   can_cite_clause: boolean;
   source_url: string;
   matched_query_type: RetrievalQueryType | null;
+  /** 条款编号（如 "第三十九条"），仅 can_cite_clause=true 的法条 chunk 有值。 */
+  article_no: string | null;
+  /** 引用标签（如 "《个人信息保护法》第三十九条"），用于引用卡片标题。 */
+  citation_label: string | null;
+  /** 标题路径（章节上下文），用于证据面板展示。 */
+  heading_path: string[];
 }
 
 /**
