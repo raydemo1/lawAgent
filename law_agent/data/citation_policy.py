@@ -22,10 +22,8 @@ CLAUSE_CITABLE_SOURCE_IDS = {
     "cac_personal_info_export_standard_contract_measures_2023",
     "cac_cross_border_data_flow_rules_2024",
     "cac_cybersecurity_review_measures_2022",
-    "cac_personal_info_export_standard_contract_filing_guide_v2_2024",
     "cac_personal_info_protection_certification_rules_2022",
     "cac_personal_info_export_certification_measures_2025",
-    "cac_personal_info_export_standard_contract_template_2023",
     "missing_20260702_009",
 }
 
@@ -64,6 +62,8 @@ INTERPRETATION_AUXILIARY_SOURCE_IDS = {
 }
 
 IMPLEMENTATION_REFERENCE_SOURCE_IDS = {
+    "cac_personal_info_export_standard_contract_filing_guide_v2_2024",
+    "cac_personal_info_export_standard_contract_template_2023",
 }
 
 FRONTEND_DIRECT_REFERENCE_SOURCE_IDS = {
@@ -96,9 +96,33 @@ def citation_role_for_source(source_id: str) -> ClauseCitationRole:
 
 
 def can_cite_clause(source_id: str) -> bool:
-    """Only primary legal basis sources may be used for concrete clause citations."""
+    """Source-level citability: True for primary legal basis sources.
+
+    This is the source-level gate. For chunk-level citation decisions
+    (whether a specific chunk may be quoted as a concrete clause), use
+    :func:`can_cite_clause_chunk` instead, which additionally requires
+    the chunk to carry a concrete ``article_no``.
+    """
 
     return citation_role_for_source(source_id) == "primary_legal_basis"
+
+
+def can_cite_clause_chunk(source_id: str, article_no: str | None) -> bool:
+    """Chunk-level citability for concrete clause citations.
+
+    A chunk may be quoted as a specific clause (e.g. "《个人信息保护法》
+    第三十九条") only when **both** conditions hold:
+
+    1. The source is a primary legal basis (``can_cite_clause(source_id)``).
+    2. The chunk carries a concrete ``article_no`` (e.g. "第三十九条").
+
+    Guide/template/certification-rule chunks that belong to citable
+    sources but lack article numbers remain retrievable and appear in the
+    evidence panel — they just cannot be inlined as concrete clause
+    citations in the conclusion.
+    """
+
+    return can_cite_clause(source_id) and bool(article_no)
 
 
 def default_retrievable_for_source(source_id: str) -> bool:

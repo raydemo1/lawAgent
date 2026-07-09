@@ -233,6 +233,9 @@ class KeywordRetriever:
                     can_cite_clause=chunk.can_cite_clause,
                     source_url=chunk.source_url,
                     matched_query_type=query_type,
+                    article_no=chunk.article_no,
+                    citation_label=chunk.citation_label,
+                    heading_path=chunk.heading_path,
                 )
             )
         return hits

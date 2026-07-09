@@ -411,4 +411,7 @@ def test_result_generation_rejects_unknown_claim_support_id() -> None:
         )
 
     assert exc_info.value.reason == "claim_grounding_validation_failed"
-    assert "missing_chunk" in exc_info.value.message
+    # Unknown chunk ids are silently dropped; the claim ends up with no
+    # supporting ids, which is what we surface. The error message lists
+    # the empty claim text rather than the dropped chunk id.
+    assert "empty_claims" in exc_info.value.message

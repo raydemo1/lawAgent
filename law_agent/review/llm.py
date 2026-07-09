@@ -86,6 +86,7 @@ class StructuredLLMNode(Generic[ModelT]):
         client: OpenAICompatibleClient,
         max_retries: int | None = None,
         trace_id: str | None = None,
+        structured_output_mode: str | None = None,
     ) -> None:
         self.node_name = node_name
         self.output_model = output_model
@@ -95,6 +96,10 @@ class StructuredLLMNode(Generic[ModelT]):
         )
         self.model = model_for_node(node_name)
         self.trace_id = trace_id
+        # Per-node override for structured output mode. None falls back to
+        # client config. result_generation sets "json_object" so the LLM can
+        # emit markdown inside string fields without strict_tool schema friction.
+        self.structured_output_mode = structured_output_mode
 
     def run(self, messages: Sequence[ChatMessage]) -> ModelT:
         attempts_allowed = self.max_retries + 1
@@ -109,6 +114,7 @@ class StructuredLLMNode(Generic[ModelT]):
                     output_model=self.output_model,
                     tool_name=self.node_name,
                     model=self.model,
+                    structured_output_mode=self.structured_output_mode,
                 )
                 return self.output_model.model_validate(raw, strict=True)
             except ValidationError as exc:

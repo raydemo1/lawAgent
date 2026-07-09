@@ -100,6 +100,14 @@ class RetrievalHit(StrictModel):
     can_cite_clause: bool
     source_url: str
     matched_query_type: RetrievalQueryType | None = None
+    # Chunk-level structured fields surfaced for citation cards and inline
+    # clause references. ``article_no`` and ``citation_label`` allow the
+    # frontend to render a proper legal citation (e.g. "《个人信息保护法》
+    # 第三十九条") instead of just the chunk title. ``heading_path`` carries
+    # the chapter/section context for the evidence panel.
+    article_no: str | None = None
+    citation_label: str | None = None
+    heading_path: list[str] = Field(default_factory=list)
 
 
 class SourceEvidencePacket(StrictModel):

@@ -512,6 +512,7 @@ def create_app(
                         chunks_path=app.state.chunks_path,
                         output_dir=tmp_path,
                         review_mode=app.state.review_mode,
+                        output_format="markdown",
                     )
                 else:
                     trace = run_hybrid_retrieval(
@@ -519,6 +520,7 @@ def create_app(
                         chunks_path=app.state.chunks_path,
                         output_dir=tmp_path,
                         review_mode=app.state.review_mode,
+                        output_format="markdown",
                     )
 
                 # Read the structured result

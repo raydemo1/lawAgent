@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from html import unescape
 
-from law_agent.data.citation_policy import can_cite_clause, citation_role_for_source
+from law_agent.data.citation_policy import citation_role_for_source
 from law_agent.data.schemas import Chunk, Document
 
 GENERIC_HARD_LIMIT_CHARS = 650
@@ -281,7 +281,6 @@ def _is_decorative_table_shard(text: str) -> bool:
 def _chunks_from_units(document: Document, units: list[StructuredUnit]) -> list[Chunk]:
     chunks: list[Chunk] = []
     citation_role = citation_role_for_source(document.source_id)
-    clause_citable = can_cite_clause(document.source_id)
 
     kept_units = [
         unit for unit in units
@@ -304,7 +303,11 @@ def _chunks_from_units(document: Document, units: list[StructuredUnit]) -> list[
                 heading_path=heading_path,
                 citation_label=citation_label,
                 citation_role=citation_role,
-                can_cite_clause=clause_citable,
+                # Structured documents (guides, templates, Q&A, standards) do
+                # not carry article numbers and therefore cannot be quoted as
+                # concrete clauses. They remain retrievable and appear in the
+                # evidence panel — just not as inline clause citations.
+                can_cite_clause=False,
                 prev_chunk_id=f"{document.doc_id}:{index - 1:04d}" if index > 0 else None,
                 next_chunk_id=f"{document.doc_id}:{index + 1:04d}" if index + 1 < len(units) else None,
                 authority=document.authority,

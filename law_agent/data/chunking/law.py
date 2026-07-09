@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from law_agent.data.citation_policy import can_cite_clause, citation_role_for_source
+from law_agent.data.citation_policy import can_cite_clause_chunk, citation_role_for_source
 from law_agent.data.schemas import Chunk, Document
 
 ARTICLE_RE = re.compile(r"(?:\*\*)?(第[一二三四五六七八九十百千万零〇\d]+条)(?:\*\*)?")
@@ -229,12 +229,11 @@ def chunk_law_document(document: Document) -> list[Chunk]:
     ]
     chunks: list[Chunk] = []
     citation_role = citation_role_for_source(document.source_id)
-    clause_citable = can_cite_clause(document.source_id)
     for index, unit in enumerate(units):
         chunk_id = f"{document.doc_id}:{index:04d}"
         heading_path = [document.title, *unit.heading_path]
-        article_no = unit.article_no
-        citation_parts = [document.title, article_no, unit.paragraph_no, unit.item_no]
+        article_no = unit.article_no or None
+        citation_parts = [document.title, unit.article_no, unit.paragraph_no, unit.item_no]
         citation_label = " ".join(part for part in citation_parts if part)
         chunks.append(
             Chunk(
@@ -246,12 +245,12 @@ def chunk_law_document(document: Document) -> list[Chunk]:
                 chunk_index=index,
                 doc_type=document.doc_type,
                 heading_path=heading_path,
-                article_no=article_no or None,
+                article_no=article_no,
                 paragraph_no=unit.paragraph_no,
                 item_no=unit.item_no,
                 citation_label=citation_label,
                 citation_role=citation_role,
-                can_cite_clause=clause_citable,
+                can_cite_clause=can_cite_clause_chunk(document.source_id, article_no),
                 prev_chunk_id=f"{document.doc_id}:{index - 1:04d}" if index > 0 else None,
                 next_chunk_id=(
                     f"{document.doc_id}:{index + 1:04d}"

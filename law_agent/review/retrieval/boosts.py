@@ -20,6 +20,7 @@ Boost rules:
 
 from __future__ import annotations
 
+from law_agent.data.citation_policy import IMPLEMENTATION_REFERENCE_SOURCE_IDS
 from law_agent.data.schemas import Chunk
 from law_agent.review.schemas import ReviewFacts, RetrievalHit, RetrievalQueryType
 
@@ -95,8 +96,16 @@ def compute_boost_for_hit(
     boost = 1.0
     role = hit.citation_role
 
-    # Primary legal basis: always slightly elevated
-    if role == "primary_legal_basis":
+    # Primary legal basis: always slightly elevated.
+    # Filing guide + standard contract template (in IMPLEMENTATION_REFERENCE_SOURCE_IDS)
+    # are implementation documents demoted from CLAUSE_CITABLE_SOURCE_IDS for citation
+    # governance only (can_cite_clause=False). Their *retrievability* must stay
+    # identical to primary law — so they are treated as primary-like for boosts.
+    is_primary_like = (
+        role == "primary_legal_basis"
+        or hit.source_id in IMPLEMENTATION_REFERENCE_SOURCE_IDS
+    )
+    if is_primary_like:
         boost *= PRIMARY_LEGAL_BASIS_BOOST
         if facts.cross_border_transfer and _chunk_mentions_any(chunk, _CROSS_BORDER_TERMS):
             boost *= CROSS_BORDER_PRIMARY_LEGAL_BASIS_BOOST

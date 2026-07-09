@@ -69,6 +69,7 @@ PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run ye
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_TOP_K = 50
 ReviewMode = Literal["rule_baseline", "llm"]
+ResultFormat = Literal["plain", "markdown"]
 DEFAULT_SUPPORTING_CHUNKS_PER_SOURCE = 2
 
 
@@ -375,6 +376,7 @@ def run_hybrid_retrieval(
     rerank_mode: RerankMode = "off",
     keyword_retriever: KeywordSearchAdapter | None = None,
     vector_retriever: VectorSearchAdapter | None = None,
+    output_format: ResultFormat = "plain",
 ) -> RetrievalTrace:
     """Run hybrid retrieval for an existing review case.
 
@@ -616,6 +618,7 @@ def run_hybrid_retrieval(
             retrieval_queries=updated_trace.queries,
             second_retrieval=updated_trace.second_retrieval,
             source_evidence_packets=source_evidence_packets,
+            output_format=output_format,
         )
     else:
         review_result = build_review_result(
@@ -681,6 +684,7 @@ def run_service_retrieval(
     rerank_mode: RerankMode = "off",
     config: "object | None" = None,
     adapters: "object | None" = None,
+    output_format: ResultFormat = "plain",
 ) -> RetrievalTrace:
     """Run hybrid retrieval backed by real Elasticsearch + pgvector.
 
@@ -718,6 +722,7 @@ def run_service_retrieval(
             rerank_mode=rerank_mode,
             keyword_retriever=adapters.keyword,
             vector_retriever=adapters.vector,
+            output_format=output_format,
         )
     finally:
         if own_adapters:

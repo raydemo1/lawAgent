@@ -210,4 +210,7 @@ def _hit_from_source(
         can_cite_clause=bool(source.get("can_cite_clause", False)),
         source_url=str(source.get("source_url", "")),
         matched_query_type=query_type,
+        article_no=source.get("article_no"),
+        citation_label=source.get("citation_label"),
+        heading_path=list(source.get("heading_path") or []),
     )
