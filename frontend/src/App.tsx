@@ -130,8 +130,9 @@ export default function App(): JSX.Element {
     setCurrentPage('case-detail');
   }, [cases]);
 
-  // The dossier is relevant on the workbench and case-detail pages.
-  const showDossier = currentPage === 'workbench' || currentPage === 'case-detail';
+  // The workbench uses the global dossier. Case detail owns a report-side
+  // citation rail so the first screen reads like a complete review report.
+  const showDossier = currentPage === 'workbench';
 
   // ---- Render -----------------------------------------------------------
   return (

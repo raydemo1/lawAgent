@@ -1277,6 +1277,192 @@ textarea {
   gap: var(--space-lg);
 }
 
+.review-report-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.review-report {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  min-width: 0;
+}
+
+.report-card {
+  border-color: rgba(30, 58, 138, 0.16);
+}
+
+.report-kicker {
+  margin-bottom: var(--space-sm);
+  color: var(--color-accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.report-title {
+  margin: var(--space-md) 0 0;
+  color: var(--color-foreground);
+  font-family: var(--font-heading);
+  font-size: 1.45rem;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+
+.report-disclosure {
+  padding: 0;
+  overflow: hidden;
+}
+
+.report-disclosure summary {
+  cursor: pointer;
+  padding: var(--space-md) var(--space-lg);
+  color: var(--color-primary);
+  font-weight: 800;
+  list-style: none;
+}
+
+.report-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-disclosure summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: var(--space-sm);
+  color: var(--color-accent);
+}
+
+.report-disclosure[open] summary {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.report-disclosure[open] summary::before {
+  content: '▾';
+}
+
+.report-disclosure__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+}
+
+.evidence-sidebar {
+  position: sticky;
+  top: 138px;
+  max-height: calc(100vh - 158px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(30, 58, 138, 0.18);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.evidence-sidebar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(30, 58, 138, 0.04);
+}
+
+.evidence-sidebar__title {
+  color: var(--color-primary);
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.evidence-sidebar__count {
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.evidence-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  overflow-y: auto;
+}
+
+.evidence-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  background: #fff;
+  scroll-margin-top: 150px;
+}
+
+.evidence-card:target {
+  border-color: rgba(180, 83, 9, 0.55);
+  box-shadow: 0 0 0 3px rgba(180, 83, 9, 0.12);
+}
+
+.evidence-card__top {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: 0.35rem;
+}
+
+.evidence-card__index {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.evidence-card__usage {
+  color: #64748b;
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.evidence-card__title {
+  color: var(--color-foreground);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.evidence-card__text {
+  display: -webkit-box;
+  margin: var(--space-xs) 0 0;
+  overflow: hidden;
+  color: #475569;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+
+.evidence-card__muted {
+  margin: var(--space-xs) 0 0;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 1100px) {
+  .review-report-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-sidebar {
+    position: static;
+    max-height: none;
+  }
+}
+
 .case-header {
   position: sticky;
   top: 0;
@@ -1411,6 +1597,10 @@ textarea {
   margin-top: var(--space-sm);
 }
 
+.grounded-claims--compact {
+  margin-top: var(--space-md);
+}
+
 .grounded-claim {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1429,6 +1619,30 @@ textarea {
   font-size: 0.875rem;
   line-height: 1.6;
   color: #334155;
+}
+
+.grounded-claims--compact .grounded-claim__text {
+  font-size: 0.9375rem;
+  color: var(--color-foreground);
+}
+
+.grounded-claim__emphasis {
+  color: #0f172a;
+  font-weight: 900;
+}
+
+.grounded-claim__marker {
+  display: inline-flex;
+  margin-left: 0.25rem;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.grounded-claim__marker:hover {
+  text-decoration: underline;
 }
 
 .grounded-claim__index {

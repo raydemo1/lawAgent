@@ -18,20 +18,21 @@
  */
 
 import { useMemo } from 'react';
-import type { ReviewApiResponse, ReviewFacts } from '../types/api';
+import type { CitationGroup, RetrievalHit, ReviewApiResponse, ReviewFacts } from '../types/api';
 import { isReviewFailedResponse } from '../types/api';
 import type { CitationVerdict, SavedCase } from '../types/case';
 import { setCitationVerdict } from '../store/caseStore';
 import RiskBadge from './RiskBadge';
 import CitationList from './CitationList';
 import FeedbackPanel from './FeedbackPanel';
-import GroundedClaims from './GroundedClaims';
+import GroundedClaims, { cssId } from './GroundedClaims';
 import { downloadHtml, downloadMarkdown } from '../utils/report';
 import {
   EVIDENCE_ISSUE_LABELS,
   EVIDENCE_STATUS_BADGE_CLASS,
   EVIDENCE_STATUS_LABELS,
   QUERY_TYPE_LABELS,
+  USAGE_LABELS,
   formatTime,
   relativeTime,
   renderBool,
@@ -216,53 +217,156 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
 
   return (
     <>
-      {/* Pipeline stepper */}
-      <PipelineStepper
-        factsCount={facts.data_types.length + (facts.cross_border_transfer ? 1 : 0)}
-        queryCount={queries.length}
-        evidenceCount={evidenceCount}
-        selfCheckStatus={selfCheck.status}
-        secondRetrieval={selfCheck.second_retrieval_triggered}
-        riskLevel={result.risk_level}
-      />
+      <div className="review-report-layout">
+        <main className="review-report">
+          <section className="card case-conclusion report-card">
+            <div className="report-kicker">审查报告</div>
+            <div className="case-conclusion__head">
+              <RiskBadge level={result.risk_level} />
+              <span className="case-conclusion__evidence">
+                证据自检：
+                <strong>{EVIDENCE_STATUS_LABELS[selfCheck.status]}</strong>
+                {response.second_retrieval_triggered ? (
+                  <span className="case-conclusion__second">· 已触发二次检索</span>
+                ) : null}
+              </span>
+            </div>
+            <h2 className="report-title">{result.conclusion}</h2>
+            <GroundedClaims
+              claims={result.claims}
+              evidenceChunks={evidenceChunks}
+              compact
+            />
+          </section>
 
-      {/* Question & material recap */}
-      <section className="card">
-        <div className="section-title">审查问题与材料</div>
-        <div className="case-field">
-          <div className="case-field__label">审查问题</div>
-          <div className="case-field__value">{saved.question}</div>
-        </div>
-        <div className="case-field">
-          <div className="case-field__label">
-            待审查材料
-            {saved.materialSource ? (
-              <span className="case-field__source">（来源：{saved.materialSource}）</span>
-            ) : null}
-          </div>
-          <pre className="case-field__material">{saved.materialText}</pre>
-        </div>
-      </section>
+          <section className="card report-card">
+            <div className="section-title">审查问题与材料</div>
+            <div className="case-field">
+              <div className="case-field__label">审查问题</div>
+              <div className="case-field__value">{saved.question}</div>
+            </div>
+            <div className="case-field">
+              <div className="case-field__label">
+                待审查材料
+                {saved.materialSource ? (
+                  <span className="case-field__source">（来源：{saved.materialSource}）</span>
+                ) : null}
+              </div>
+              <pre className="case-field__material">{saved.materialText}</pre>
+            </div>
+          </section>
 
-      {/* Conclusion — surfaced early for at-a-glance reading */}
-      <section className="card case-conclusion">
-        <div className="section-title">审查结论</div>
-        <div className="case-conclusion__head">
-          <RiskBadge level={result.risk_level} />
-          <span className="case-conclusion__evidence">
-            证据自检：
-            <strong>{EVIDENCE_STATUS_LABELS[selfCheck.status]}</strong>
-            {response.second_retrieval_triggered ? (
-              <span className="case-conclusion__second">· 已触发二次检索</span>
-            ) : null}
-          </span>
-        </div>
-        <p className="case-conclusion__text">{result.conclusion}</p>
-        <GroundedClaims claims={result.claims} evidenceChunks={evidenceChunks} />
-      </section>
+          <ReportSection title="建议动作" items={result.recommended_actions} ordered />
+          <ReportSection title="风险边界" items={result.risk_boundaries} tone="warning" />
+          <ReportSection title="缺失信息" items={result.missing_information} tone="missing" />
 
-      {/* Facts */}
-      <section className="card">
+          {result.trigger_reasons.length > 0 ? (
+            <section className="card report-card">
+              <div className="section-title">触发原因</div>
+              <div className="tag-list">
+                {result.trigger_reasons.map((reason, i) => (
+                  <span className="tag" key={i}>{reason}</span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <details className="card report-disclosure">
+            <summary>展开审查流程与调试信息</summary>
+            <div className="report-disclosure__body">
+              <PipelineStepper
+                factsCount={facts.data_types.length + (facts.cross_border_transfer ? 1 : 0)}
+                queryCount={queries.length}
+                evidenceCount={evidenceCount}
+                selfCheckStatus={selfCheck.status}
+                secondRetrieval={selfCheck.second_retrieval_triggered}
+                riskLevel={result.risk_level}
+              />
+              <ProcessDetails
+                facts={facts}
+                queries={queries}
+                selfCheck={selfCheck}
+                evidenceCount={evidenceCount}
+                citationCount={citationCount}
+              />
+            </div>
+          </details>
+
+          <details className="card report-disclosure">
+            <summary>展开完整证据包与人工反馈</summary>
+            <div className="report-disclosure__body">
+              <CitationList
+                groups={response.citation_groups}
+                evidenceChunks={evidenceChunks}
+                sourceEvidencePackets={response.source_evidence_packets}
+                verdicts={verdicts}
+                onVerdictChange={onVerdictChange}
+              />
+              <FeedbackPanel saved={saved} />
+            </div>
+          </details>
+        </main>
+
+        <EvidenceSidebar
+          groups={response.citation_groups}
+          evidenceChunks={evidenceChunks}
+        />
+      </div>
+    </>
+  );
+}
+
+function ReportSection({
+  title,
+  items,
+  ordered = false,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  ordered?: boolean;
+  tone?: 'warning' | 'missing';
+}): JSX.Element | null {
+  if (items.length === 0) return null;
+  const className = tone === 'warning' ? 'warning-list' : tone === 'missing' ? 'missing-list' : 'action-list';
+  return (
+    <section className="card report-card">
+      <div className="section-title">{title}</div>
+      {ordered ? (
+        <ol className={className}>
+          {items.map((item, i) => (
+            <li className="action-list__item" key={i}>{item}</li>
+          ))}
+        </ol>
+      ) : (
+        <div className={className}>
+          {items.map((item, i) => (
+            <div className={tone === 'warning' ? 'warning-note' : undefined} key={i}>
+              {item}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ProcessDetails({
+  facts,
+  queries,
+  selfCheck,
+  evidenceCount,
+  citationCount,
+}: {
+  facts: ReviewFacts;
+  queries: NonNullable<Extract<ReviewApiResponse, { review_case_id: string }>['retrieval_queries']>;
+  selfCheck: Extract<ReviewApiResponse, { review_case_id: string }>['evidence_self_check'];
+  evidenceCount: number;
+  citationCount: number;
+}): JSX.Element {
+  return (
+    <>
+      <section>
         <div className="section-title">材料事实摘要</div>
         <div className="facts-grid">
           {FACT_FIELDS.map((f) => (
@@ -274,8 +378,7 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
         </div>
       </section>
 
-      {/* Query plan */}
-      <section className="card">
+      <section>
         <div className="section-title">检索查询计划</div>
         {queries.length === 0 ? (
           <div className="state-block__hint">未生成检索查询。</div>
@@ -292,8 +395,7 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
         )}
       </section>
 
-      {/* Evidence self-check */}
-      <section className="card">
+      <section>
         <div className="section-title">证据自检</div>
         <div className="selfcheck">
           <div className="selfcheck__row">
@@ -342,80 +444,64 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
             </div>
           </div>
         ) : null}
-
-        {selfCheck.second_retrieval_plan ? (
-          <div className="selfcheck__plan">
-            <div className="selfcheck__sublabel">二次检索计划</div>
-            <div className="selfcheck__plan-grid">
-              <div><strong>扩展查询</strong>：{selfCheck.second_retrieval_plan.expanded_queries.length} 条</div>
-              <div><strong>增加 top_k</strong>：{selfCheck.second_retrieval_plan.increased_top_k}</div>
-              <div><strong>加强 boost</strong>：{selfCheck.second_retrieval_plan.stronger_boost ? '是' : '否'}</div>
-            </div>
-            <div className="selfcheck__plan-reason">{selfCheck.second_retrieval_plan.reason}</div>
-          </div>
-        ) : null}
       </section>
-
-      {/* Trigger reasons / actions / boundaries */}
-      {result.trigger_reasons.length > 0 ? (
-        <section className="card">
-          <div className="section-title">触发原因</div>
-          <div className="tag-list">
-            {result.trigger_reasons.map((reason, i) => (
-              <span className="tag" key={i}>{reason}</span>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {result.recommended_actions.length > 0 ? (
-        <section className="card">
-          <div className="section-title">建议动作</div>
-          <ol className="action-list">
-            {result.recommended_actions.map((action, i) => (
-              <li className="action-list__item" key={i}>{action}</li>
-            ))}
-          </ol>
-        </section>
-      ) : null}
-
-      {result.risk_boundaries.length > 0 ? (
-        <section className="card">
-          <div className="section-title">风险边界</div>
-          <div className="warning-list">
-            {result.risk_boundaries.map((boundary, i) => (
-              <div className="warning-note" key={i}>{boundary}</div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {result.missing_information.length > 0 ? (
-        <section className="card">
-          <div className="section-title">缺失信息</div>
-          <ul className="missing-list">
-            {result.missing_information.map((m, i) => (
-              <li key={i}>{m}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {/* Expandable citations with feedback */}
-      <section className="card">
-        <div className="section-title">可引用证据与来源包（点击展开）</div>
-        <CitationList
-          groups={response.citation_groups}
-          evidenceChunks={evidenceChunks}
-          sourceEvidencePackets={response.source_evidence_packets}
-          verdicts={verdicts}
-          onVerdictChange={onVerdictChange}
-        />
-      </section>
-
-      {/* Human feedback */}
-      <FeedbackPanel saved={saved} />
     </>
+  );
+}
+
+function EvidenceSidebar({
+  groups,
+  evidenceChunks,
+}: {
+  groups: CitationGroup[];
+  evidenceChunks: RetrievalHit[];
+}): JSX.Element {
+  const chunks = useMemo(() => {
+    const map = new Map<string, RetrievalHit>();
+    evidenceChunks.forEach((chunk) => map.set(chunk.chunk_id, chunk));
+    return map;
+  }, [evidenceChunks]);
+  const citations = groups.flatMap((group) =>
+    group.citations.map((citation) => ({
+      ...citation,
+      groupUsage: group.usage,
+      chunk: chunks.get(citation.chunk_id),
+    })),
+  );
+
+  return (
+    <aside className="evidence-sidebar" aria-label="引用依据">
+      <div className="evidence-sidebar__head">
+        <div className="evidence-sidebar__title">引用依据</div>
+        <div className="evidence-sidebar__count">{citations.length} 条</div>
+      </div>
+      {citations.length === 0 ? (
+        <div className="state-block__hint">暂无可引用依据。</div>
+      ) : (
+        <div className="evidence-sidebar__list">
+          {citations.map((item, index) => (
+            <article
+              className="evidence-card"
+              id={`evidence-${cssId(item.chunk_id)}`}
+              key={item.chunk_id}
+            >
+              <div className="evidence-card__top">
+                <span className="evidence-card__index">[{shortId(item.chunk_id)}]</span>
+                <span className="evidence-card__usage">{USAGE_LABELS[item.groupUsage]}</span>
+              </div>
+              <div className="evidence-card__title">
+                {index + 1}. {item.citation_label ?? item.title}
+              </div>
+              {item.chunk ? (
+                <p className="evidence-card__text">{item.chunk.text}</p>
+              ) : (
+                <p className="evidence-card__muted">该证据正文不可用。</p>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </aside>
   );
 }
 
