@@ -401,10 +401,11 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
 
       {/* Expandable citations with feedback */}
       <section className="card">
-        <div className="section-title">可引用证据（点击展开）</div>
+        <div className="section-title">可引用证据与来源包（点击展开）</div>
         <CitationList
           groups={response.citation_groups}
           evidenceChunks={evidenceChunks}
+          sourceEvidencePackets={response.source_evidence_packets}
           verdicts={verdicts}
           onVerdictChange={onVerdictChange}
         />

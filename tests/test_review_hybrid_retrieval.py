@@ -338,6 +338,40 @@ def test_rrf_fuse_preserves_metadata_from_base_hit() -> None:
     assert fused[0].matched_query_type == "legal_issue"
 
 
+def test_source_evidence_packets_keep_same_source_supporting_chunks() -> None:
+    from law_agent.review.service import (
+        build_source_evidence_packets,
+        flatten_source_evidence_packets,
+    )
+
+    representative = _make_hit("a1", rank=0, score=1.0).model_copy(
+        update={"source_id": "source_a", "title": "来源 A"}
+    )
+    supporting = [
+        _make_hit("a2", rank=1, score=0.9).model_copy(update={"source_id": "source_a"}),
+        _make_hit("a3", rank=2, score=0.8).model_copy(update={"source_id": "source_a"}),
+        _make_hit("b1", rank=3, score=0.7).model_copy(update={"source_id": "source_b"}),
+    ]
+    neighbor = _make_hit("a0", rank=-1, score=0.0).model_copy(update={"source_id": "source_a"})
+
+    packets = build_source_evidence_packets(
+        representative_hits=[representative],
+        candidate_hits=[representative, *supporting],
+        neighbor_hits=[neighbor],
+    )
+
+    assert len(packets) == 1
+    assert packets[0].representative_chunk.chunk_id == "a1"
+    assert [hit.chunk_id for hit in packets[0].supporting_chunks] == ["a2", "a3"]
+    assert [hit.chunk_id for hit in packets[0].neighbor_chunks] == ["a0"]
+    assert [hit.chunk_id for hit in flatten_source_evidence_packets(packets)] == [
+        "a1",
+        "a2",
+        "a3",
+        "a0",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Neighbor expansion tests
 # ---------------------------------------------------------------------------

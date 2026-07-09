@@ -188,6 +188,21 @@ export interface RetrievalHit {
 }
 
 /**
+ * Chunk-level evidence retained for one selected source.
+ *
+ * The backend uses source-aware fusion to pick diverse sources, then attaches
+ * same-source supporting chunks and neighbor chunks so the report and UI keep
+ * the precise passages behind each source.
+ */
+export interface SourceEvidencePacket {
+  source_id: string;
+  title: string;
+  representative_chunk: RetrievalHit;
+  supporting_chunks: RetrievalHit[];
+  neighbor_chunks: RetrievalHit[];
+}
+
+/**
  * Plan for one controlled second retrieval when evidence is weak.
  *
  * Matches `SecondRetrievalPlan` in `law_agent/review/schemas.py`.
@@ -251,7 +266,9 @@ export interface ReviewResponse {
   /** Typed retrieval queries planned from the question + facts (query plan). */
   retrieval_queries?: RetrievalQuery[];
   /** Final evidence hits with chunk text, used to expand citations inline. */
-  evidence_chunks?: RetrievalHit[];
+  evidence_chunks: RetrievalHit[];
+  /** Source-level evidence packets with representative/supporting/neighbor chunks. */
+  source_evidence_packets: SourceEvidencePacket[];
 }
 
 /**

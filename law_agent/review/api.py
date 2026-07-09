@@ -41,6 +41,7 @@ from law_agent.review.schemas import (
     ReviewResult,
     RetrievalHit,
     RetrievalQuery,
+    SourceEvidencePacket,
 )
 from law_agent.review.service import (
     DEFAULT_REVIEW_RUNS_DIR,
@@ -136,6 +137,7 @@ class ReviewResponse(BaseModel):
     # text. These are additive and default to empty for backward compat.
     retrieval_queries: list[RetrievalQuery] = Field(default_factory=list)
     evidence_chunks: list[RetrievalHit] = Field(default_factory=list)
+    source_evidence_packets: list[SourceEvidencePacket] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
@@ -528,6 +530,12 @@ def create_app(
                     )
                 review_result = results[0]
 
+                from law_agent.review.service import flatten_source_evidence_packets
+
+                evidence_chunks = flatten_source_evidence_packets(
+                    trace.source_evidence_packets
+                )
+
                 return ReviewResponse(
                     review_case_id=case_id,
                     trace_id=trace_id,
@@ -537,7 +545,8 @@ def create_app(
                     citation_groups=review_result.applicable_evidence,
                     second_retrieval_triggered=trace.evidence_self_check.second_retrieval_triggered,
                     retrieval_queries=trace.queries,
-                    evidence_chunks=trace.final_evidence,
+                    evidence_chunks=evidence_chunks,
+                    source_evidence_packets=trace.source_evidence_packets,
                 )
             except HTTPException:
                 raise

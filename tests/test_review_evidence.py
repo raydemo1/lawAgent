@@ -358,6 +358,7 @@ def test_hybrid_retrieval_persists_self_check_and_final_evidence(tmp_path: Path)
 
     assert trace.evidence_self_check.status != "not_checked"
     assert len(trace.final_evidence) > 0
+    assert len(trace.source_evidence_packets) > 0
 
 
 def test_hybrid_retrieval_second_retrieval_never_loops_more_than_once(tmp_path: Path) -> None:

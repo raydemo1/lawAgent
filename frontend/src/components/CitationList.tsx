@@ -16,7 +16,12 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { Citation, CitationGroup, RetrievalHit } from '../types/api';
+import type {
+  Citation,
+  CitationGroup,
+  RetrievalHit,
+  SourceEvidencePacket,
+} from '../types/api';
 import type { CitationVerdict } from '../types/case';
 import {
   CITATION_ROLE_LABELS,
@@ -28,6 +33,7 @@ import {
 interface CitationListProps {
   groups: CitationGroup[];
   evidenceChunks: RetrievalHit[] | undefined;
+  sourceEvidencePackets: SourceEvidencePacket[];
   /** Per-chunk verdicts from the saved case feedback. */
   verdicts: Record<string, CitationVerdict>;
   /** Called when the user toggles a citation verdict. */
@@ -45,6 +51,7 @@ function chunksById(hits: RetrievalHit[] | undefined): Map<string, RetrievalHit>
 export default function CitationList({
   groups,
   evidenceChunks,
+  sourceEvidencePackets,
   verdicts,
   onVerdictChange,
   feedbackDisabled = false,
@@ -58,7 +65,7 @@ export default function CitationList({
     [groups],
   );
 
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && sourceEvidencePackets.length === 0) {
     return (
       <div className="state-block">
         <div className="state-block__title">暂无可引用证据</div>
@@ -69,6 +76,10 @@ export default function CitationList({
 
   return (
     <div className="cite-list">
+      {sourceEvidencePackets.length > 0 ? (
+        <SourcePacketList packets={sourceEvidencePackets} />
+      ) : null}
+
       {ordered.map((group) => (
         <section className="cite-list__group" key={group.usage}>
           <div className="cite-list__group-head">
@@ -96,6 +107,94 @@ export default function CitationList({
         </section>
       ))}
     </div>
+  );
+}
+
+function SourcePacketList({
+  packets,
+}: {
+  packets: SourceEvidencePacket[];
+}): JSX.Element {
+  return (
+    <section className="source-packets">
+      <div className="source-packets__head">
+        <span className="source-packets__title">来源证据包</span>
+        <span className="source-packets__count">{packets.length} 个来源</span>
+      </div>
+      <div className="source-packets__list">
+        {packets.map((packet, index) => (
+          <SourcePacketRow packet={packet} index={index + 1} key={packet.source_id} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SourcePacketRow({
+  packet,
+  index,
+}: {
+  packet: SourceEvidencePacket;
+  index: number;
+}): JSX.Element {
+  const [open, setOpen] = useState(index <= 2);
+  const supportingCount = packet.supporting_chunks.length;
+  const neighborCount = packet.neighbor_chunks.length;
+  return (
+    <div className={'source-packet' + (open ? ' is-open' : '')}>
+      <button
+        type="button"
+        className="source-packet__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="cite-row__chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+        <span className="cite-row__index">{index}</span>
+        <span className="source-packet__title">{packet.title}</span>
+        <span className="source-packet__meta">
+          支撑 {supportingCount} · 邻居 {neighborCount}
+        </span>
+      </button>
+      {open ? (
+        <div className="source-packet__body">
+          <PacketChunk label="代表 chunk" chunk={packet.representative_chunk} />
+          {packet.supporting_chunks.map((chunk, idx) => (
+            <PacketChunk label={`同源支撑 ${idx + 1}`} chunk={chunk} key={chunk.chunk_id} />
+          ))}
+          {packet.neighbor_chunks.map((chunk, idx) => (
+            <PacketChunk label={`邻居上下文 ${idx + 1}`} chunk={chunk} key={chunk.chunk_id} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PacketChunk({
+  label,
+  chunk,
+}: {
+  label: string;
+  chunk: RetrievalHit;
+}): JSX.Element {
+  return (
+    <article className="packet-chunk">
+      <div className="packet-chunk__head">
+        <span className="packet-chunk__label">{label}</span>
+        <span className="packet-chunk__meta">
+          <code>{shortId(chunk.chunk_id)}</code>
+          <code>{chunk.score.toFixed(4)}</code>
+          {chunk.can_cite_clause ? (
+            <span className="cite-chip cite-chip--cite">可引用</span>
+          ) : (
+            <span className="cite-chip cite-chip--ref">参考</span>
+          )}
+        </span>
+      </div>
+      <pre className="packet-chunk__text">{chunk.text}</pre>
+    </article>
   );
 }
 

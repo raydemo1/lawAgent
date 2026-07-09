@@ -57,6 +57,7 @@ from law_agent.review.schemas import (
     ReviewFacts,
     ReviewResult,
     ReviewRunResponse,
+    SourceEvidencePacket,
     RetrievalHit,
     RetrievalQuery,
     RetrievalTrace,
@@ -68,6 +69,7 @@ PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run ye
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_TOP_K = 50
 ReviewMode = Literal["rule_baseline", "llm"]
+DEFAULT_SUPPORTING_CHUNKS_PER_SOURCE = 2
 
 
 def _validate_non_blank(value: str, field_name: str) -> str:
@@ -297,6 +299,71 @@ def _load_case_and_trace(
     return target_case, target_trace, traces
 
 
+def _dedupe_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    seen: set[str] = set()
+    deduped: list[RetrievalHit] = []
+    for hit in hits:
+        if hit.chunk_id in seen:
+            continue
+        seen.add(hit.chunk_id)
+        deduped.append(hit)
+    return deduped
+
+
+def flatten_source_evidence_packets(
+    packets: list[SourceEvidencePacket],
+) -> list[RetrievalHit]:
+    """Return packet evidence as an ordered, de-duplicated chunk list."""
+
+    hits: list[RetrievalHit] = []
+    for packet in packets:
+        hits.append(packet.representative_chunk)
+        hits.extend(packet.supporting_chunks)
+        hits.extend(packet.neighbor_chunks)
+    return _dedupe_hits(hits)
+
+
+def build_source_evidence_packets(
+    *,
+    representative_hits: list[RetrievalHit],
+    candidate_hits: list[RetrievalHit],
+    neighbor_hits: list[RetrievalHit],
+    supporting_per_source: int = DEFAULT_SUPPORTING_CHUNKS_PER_SOURCE,
+) -> list[SourceEvidencePacket]:
+    """Attach chunk-level context to each source-aware representative hit."""
+
+    candidates_by_source: dict[str, list[RetrievalHit]] = {}
+    for hit in sorted(candidate_hits, key=lambda h: (h.rank, -h.score, h.chunk_id)):
+        candidates_by_source.setdefault(hit.source_id, []).append(hit)
+
+    neighbors_by_source: dict[str, list[RetrievalHit]] = {}
+    for hit in neighbor_hits:
+        neighbors_by_source.setdefault(hit.source_id, []).append(hit)
+
+    packets: list[SourceEvidencePacket] = []
+    for representative in representative_hits:
+        supporting = [
+            hit
+            for hit in candidates_by_source.get(representative.source_id, [])
+            if hit.chunk_id != representative.chunk_id
+        ][:supporting_per_source]
+        neighbors = [
+            hit
+            for hit in neighbors_by_source.get(representative.source_id, [])
+            if hit.chunk_id != representative.chunk_id
+        ]
+        packets.append(
+            SourceEvidencePacket(
+                source_id=representative.source_id,
+                title=representative.title,
+                representative_chunk=representative,
+                supporting_chunks=_dedupe_hits(supporting),
+                neighbor_chunks=_dedupe_hits(neighbors),
+            )
+        )
+    return packets
+
+
 def run_hybrid_retrieval(
     *,
     case_id: str,
@@ -412,6 +479,11 @@ def run_hybrid_retrieval(
         self_check = run_self_check(hybrid_hits, facts, chunks_by_id)
     second_retrieval_info: dict[str, object] = {}
     final_evidence: list[RetrievalHit] = hybrid_hits
+    source_evidence_packets = build_source_evidence_packets(
+        representative_hits=final_evidence,
+        candidate_hits=hybrid_candidates,
+        neighbor_hits=neighbor_hits,
+    )
 
     if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
         plan = self_check.second_retrieval_plan
@@ -479,6 +551,11 @@ def run_hybrid_retrieval(
 
         # Use second retrieval results as final evidence
         final_evidence = hybrid2_hits
+        source_evidence_packets = build_source_evidence_packets(
+            representative_hits=final_evidence,
+            candidate_hits=hybrid2_candidates,
+            neighbor_hits=neighbor2_hits,
+        )
         second_retrieval_info = {
             "triggered": True,
             "expanded_queries": [q.model_dump() for q in plan.expanded_queries],
@@ -501,6 +578,7 @@ def run_hybrid_retrieval(
                 "evidence_self_check": self_check,
                 "second_retrieval": second_retrieval_info,
                 "final_evidence": final_evidence,
+                "source_evidence_packets": source_evidence_packets,
             }
         )
     else:
@@ -515,12 +593,15 @@ def run_hybrid_retrieval(
                 "evidence_self_check": self_check,
                 "second_retrieval": second_retrieval_info,
                 "final_evidence": final_evidence,
+                "source_evidence_packets": source_evidence_packets,
             }
         )
 
     retrieval_latency_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
     # Issue 8: Build governed review result
+    result_evidence = flatten_source_evidence_packets(source_evidence_packets)
+
     if review_mode == "llm":
         review_result = build_review_result_with_deepseek(
             review_result_id=case.latest_result_id or make_id("result"),
@@ -528,12 +609,13 @@ def run_hybrid_retrieval(
             trace_id=target_trace.trace_id,
             facts=facts,
             self_check=self_check,
-            evidence_hits=final_evidence,
+            evidence_hits=result_evidence,
             chunks_by_id=chunks_by_id,
             question=case.question,
             material_text=case.material.material_text,
             retrieval_queries=updated_trace.queries,
             second_retrieval=updated_trace.second_retrieval,
+            source_evidence_packets=source_evidence_packets,
         )
     else:
         review_result = build_review_result(
@@ -542,7 +624,7 @@ def run_hybrid_retrieval(
             trace_id=target_trace.trace_id,
             facts=facts,
             self_check=self_check,
-            evidence_hits=final_evidence,
+            evidence_hits=result_evidence,
             chunks_by_id=chunks_by_id,
         )
 

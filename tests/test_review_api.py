@@ -93,6 +93,9 @@ def test_review_returns_structured_response(client: TestClient) -> None:
     assert "evidence_self_check" in data
     assert "citation_groups" in data
     assert "second_retrieval_triggered" in data
+    assert "source_evidence_packets" in data
+    assert len(data["source_evidence_packets"]) > 0
+    assert len(data["evidence_chunks"]) >= len(data["source_evidence_packets"])
 
     # Review facts should be populated
     facts = data["review_facts"]

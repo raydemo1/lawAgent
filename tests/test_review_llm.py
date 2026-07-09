@@ -24,6 +24,7 @@ from law_agent.review.result_builder import (
 )
 from law_agent.review.schemas import ReviewFacts
 from law_agent.review.schemas import EvidenceSelfCheck
+from law_agent.review.schemas import SourceEvidencePacket
 from law_agent.review.telemetry import current_telemetry, reset_telemetry
 
 from tests.test_review_result_builder import _hit
@@ -87,10 +88,23 @@ def test_evidence_prompt_contains_json_example() -> None:
 
 
 def test_result_prompt_contains_json_example() -> None:
+    representative = _hit()
+    packet = SourceEvidencePacket(
+        source_id=representative.source_id,
+        title=representative.title,
+        representative_chunk=representative,
+        supporting_chunks=[
+            representative.model_copy(update={"chunk_id": "support_1", "text": "支撑条款"})
+        ],
+        neighbor_chunks=[
+            representative.model_copy(update={"chunk_id": "neighbor_1", "text": "上下文条款"})
+        ],
+    )
     messages = build_result_generation_messages(
         facts=ReviewFacts(cross_border_transfer=True),
         self_check=EvidenceSelfCheck(status="sufficient"),
-        evidence_hits=[_hit()],
+        evidence_hits=[representative],
+        source_evidence_packets=[packet],
         question="是否需要数据出境安全评估？",
         material_text="手机号发送给新加坡服务商。",
     )
@@ -101,6 +115,9 @@ def test_result_prompt_contains_json_example() -> None:
     assert '"risk_level"' in combined
     assert '"question"' in combined
     assert '"material_excerpt"' in combined
+    assert "evidence_packets" in combined
+    assert "supporting_chunks" in combined
+    assert "neighbor_chunks" in combined
     assert "retrieval_queries" in combined
 
 

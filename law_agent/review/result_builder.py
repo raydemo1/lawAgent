@@ -33,6 +33,7 @@ from law_agent.review.schemas import (
     RetrievalHit,
     RetrievalQuery,
     RiskLevel,
+    SourceEvidencePacket,
 )
 
 # ---------------------------------------------------------------------------
@@ -359,6 +360,7 @@ def build_result_generation_messages(
     material_text: str | None = None,
     retrieval_queries: list[RetrievalQuery] | None = None,
     second_retrieval: dict[str, object] | None = None,
+    source_evidence_packets: list[SourceEvidencePacket] | None = None,
 ) -> list[ChatMessage]:
     """Build a DeepSeek JSON prompt for structured review result generation."""
 
@@ -370,17 +372,19 @@ def build_result_generation_messages(
         "recommended_actions": ["确认是否取得单独同意", "确认出境数据规模"],
         "risk_boundaries": ["本结论基于当前材料和已召回证据，不构成正式法律意见"],
     }
-    evidence = [
+    evidence_packets = [
         {
-            "chunk_id": hit.chunk_id,
-            "source_id": hit.source_id,
-            "title": hit.title,
-            "text": hit.text[:1200],
-            "citation_role": hit.citation_role,
-            "can_cite_clause": hit.can_cite_clause,
-            "source_url": hit.source_url,
+            "source_id": packet.source_id,
+            "title": packet.title,
+            "representative_chunk": _llm_evidence_hit(packet.representative_chunk),
+            "supporting_chunks": [
+                _llm_evidence_hit(hit) for hit in packet.supporting_chunks[:2]
+            ],
+            "neighbor_chunks": [
+                _llm_evidence_hit(hit) for hit in packet.neighbor_chunks[:2]
+            ],
         }
-        for hit in evidence_hits[:12]
+        for packet in (source_evidence_packets or [])
     ]
     payload = {
         "question": question,
@@ -391,7 +395,7 @@ def build_result_generation_messages(
             query.model_dump() for query in (retrieval_queries or [])
         ],
         "second_retrieval": second_retrieval or {},
-        "evidence": evidence,
+        "evidence_packets": evidence_packets,
         "corpus_scope": {
             "jurisdiction": "中国大陆数据合规和个人信息保护语料",
             "includes": [
@@ -407,9 +411,9 @@ def build_result_generation_messages(
         },
         "json_example": json_example,
         "instructions": [
-            "基于审查事实和证据生成结构化审查结果。",
+            "基于审查事实和 evidence_packets 生成结构化审查结果。",
             "必须结合 question、material_excerpt、retrieval_queries 和 evidence_self_check 判断结论边界。",
-            "只能基于 corpus_scope 内的中国数据合规语料和 evidence 作答；如果 question 明确询问 corpus_scope.excludes 中的法域或制度，risk_level 必须为 insufficient_evidence。",
+            "只能基于 corpus_scope 内的中国数据合规语料和 evidence_packets 作答；如果 question 明确询问 corpus_scope.excludes 中的法域或制度，risk_level 必须为 insufficient_evidence。",
             "不要过度谨慎：如果材料已有可审查事实且 evidence 支持相关规则，即使缺少数据规模、同意状态、备案细节等信息，也要给出 high、medium 或 low 的有边界判断。",
             "缺失事实优先写入 missing_information、recommended_actions 和 risk_boundaries；不要仅因存在 missing_information 就输出 insufficient_evidence。",
             "如果材料没有说明关键事实（数据类型、处理目的、是否出境、接收方、地区/行业等），不要把 question 中的假设当作事实；只有在无法形成任何有用边界判断时才输出 insufficient_evidence。",
@@ -419,6 +423,7 @@ def build_result_generation_messages(
             "evidence_self_check.status=sufficient 表示证据可用于当前语料范围内的判断；若事实有缺口但仍可形成边界判断，不要拒答。",
             "insufficient_evidence 只适用于：证据自检 insufficient、材料几乎没有可审查事实、问题超出 corpus_scope、或证据与问题/材料明显不匹配。",
             "不得编造未出现在证据中的法律来源。",
+            "优先依据 representative_chunk；supporting_chunks 用于补充同一来源内更精确的条款；neighbor_chunks 只用于理解上下文。",
             "引用分组由程序处理，本节点不要输出 citations。",
             "不要输出解释、markdown 或自然语言。",
         ],
@@ -435,6 +440,21 @@ def build_result_generation_messages(
     ]
 
 
+def _llm_evidence_hit(hit: RetrievalHit) -> dict[str, object]:
+    return {
+        "chunk_id": hit.chunk_id,
+        "source_id": hit.source_id,
+        "title": hit.title,
+        "text": hit.text[:1200],
+        "citation_role": hit.citation_role,
+        "can_cite_clause": hit.can_cite_clause,
+        "source_url": hit.source_url,
+        "score": hit.score,
+        "rank": hit.rank,
+        "matched_query_type": hit.matched_query_type,
+    }
+
+
 def build_review_result_with_deepseek(
     *,
     review_result_id: str,
@@ -448,6 +468,7 @@ def build_review_result_with_deepseek(
     material_text: str | None = None,
     retrieval_queries: list[RetrievalQuery] | None = None,
     second_retrieval: dict[str, object] | None = None,
+    source_evidence_packets: list[SourceEvidencePacket] | None = None,
     client: OpenAICompatibleClient | None = None,
     max_retries: int | None = None,
 ) -> ReviewResult:
@@ -474,6 +495,7 @@ def build_review_result_with_deepseek(
             material_text=material_text,
             retrieval_queries=retrieval_queries,
             second_retrieval=second_retrieval,
+            source_evidence_packets=source_evidence_packets,
         )
     )
 

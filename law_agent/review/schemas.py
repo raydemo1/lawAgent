@@ -102,6 +102,22 @@ class RetrievalHit(StrictModel):
     matched_query_type: RetrievalQueryType | None = None
 
 
+class SourceEvidencePacket(StrictModel):
+    """Evidence retained for one selected source.
+
+    ``representative_chunk`` is the source-level hit used for final source
+    diversity. ``supporting_chunks`` and ``neighbor_chunks`` preserve
+    chunk-level context so result generation and citation expansion do not
+    lose more precise passages from the same source.
+    """
+
+    source_id: str
+    title: str
+    representative_chunk: RetrievalHit
+    supporting_chunks: list[RetrievalHit] = Field(default_factory=list)
+    neighbor_chunks: list[RetrievalHit] = Field(default_factory=list)
+
+
 class EvidenceIssue(StrictModel):
     """A specific evidence sufficiency issue detected during self-check."""
 
@@ -203,6 +219,7 @@ class RetrievalTrace(StrictModel):
     rerank: dict[str, object] = Field(default_factory=dict)
     second_retrieval: dict[str, object] = Field(default_factory=dict)
     final_evidence: list[RetrievalHit] = Field(default_factory=list)
+    source_evidence_packets: list[SourceEvidencePacket] = Field(default_factory=list)
     citation_validation: dict[str, object] = Field(default_factory=dict)
     latency_ms: int | None = None
     total_latency_ms: int | None = None
