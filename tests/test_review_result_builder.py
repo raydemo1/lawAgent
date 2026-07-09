@@ -342,6 +342,8 @@ def test_build_review_result_cross_border_sample() -> None:
     assert "legal_basis_or_consent" in result.missing_information
     assert len(result.recommended_actions) > 0
     assert len(result.risk_boundaries) > 0
+    assert result.claims
+    assert result.claims[0].supporting_chunk_ids == ["chunk_assessment", "chunk_faq"]
     assert len(result.citations) == 2
     assert len(result.applicable_evidence) >= 1
 
@@ -362,6 +364,8 @@ def test_build_review_result_insufficient_evidence() -> None:
 
     assert result.risk_level == "insufficient_evidence"
     assert "证据不足" in result.conclusion
+    assert result.claims
+    assert result.claims[0].supporting_chunk_ids == []
     # Insufficient evidence should NOT cite weak evidence as legal basis
     legal_groups = [g for g in result.applicable_evidence if g.usage == "legal_basis"]
     assert len(legal_groups) == 0

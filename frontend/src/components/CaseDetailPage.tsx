@@ -25,6 +25,7 @@ import { setCitationVerdict } from '../store/caseStore';
 import RiskBadge from './RiskBadge';
 import CitationList from './CitationList';
 import FeedbackPanel from './FeedbackPanel';
+import GroundedClaims from './GroundedClaims';
 import { downloadHtml, downloadMarkdown } from '../utils/report';
 import {
   EVIDENCE_ISSUE_LABELS,
@@ -257,6 +258,7 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
           </span>
         </div>
         <p className="case-conclusion__text">{result.conclusion}</p>
+        <GroundedClaims claims={result.claims} evidenceChunks={evidenceChunks} />
       </section>
 
       {/* Facts */}

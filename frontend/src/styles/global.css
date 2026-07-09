@@ -1404,6 +1404,78 @@ textarea {
   padding: var(--space-md);
 }
 
+.grounded-claims {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.grounded-claim {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-sm);
+  align-items: flex-start;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.grounded-claim__text {
+  display: flex;
+  gap: var(--space-sm);
+  min-width: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.grounded-claim__index {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(30, 58, 138, 0.08);
+  color: var(--color-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.grounded-claim__refs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.grounded-claim__ref {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 1px solid rgba(30, 58, 138, 0.22);
+  border-radius: var(--radius-pill);
+  background: rgba(30, 58, 138, 0.06);
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  .grounded-claim {
+    grid-template-columns: 1fr;
+  }
+
+  .grounded-claim__refs {
+    justify-content: flex-start;
+  }
+}
+
 /* ============================================================
  * Pipeline stepper
  * ============================================================ */

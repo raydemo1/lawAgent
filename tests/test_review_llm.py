@@ -116,6 +116,7 @@ def test_result_prompt_contains_json_example() -> None:
     assert '"question"' in combined
     assert '"material_excerpt"' in combined
     assert "evidence_packets" in combined
+    assert "supporting_chunk_ids" in combined
     assert "supporting_chunks" in combined
     assert "neighbor_chunks" in combined
     assert "retrieval_queries" in combined
@@ -307,6 +308,12 @@ def test_result_generation_with_deepseek_uses_program_citation_groups() -> None:
             {
                 "risk_level": "medium",
                 "conclusion": "该场景涉及数据出境，需要进一步确认申报条件。",
+                "claims": [
+                    {
+                        "text": "该场景涉及数据出境。",
+                        "supporting_chunk_ids": ["c1"],
+                    }
+                ],
                 "trigger_reasons": ["cross_border_transfer"],
                 "missing_information": ["data_volume_threshold"],
                 "recommended_actions": ["确认出境数据规模"],
@@ -328,6 +335,7 @@ def test_result_generation_with_deepseek_uses_program_citation_groups() -> None:
 
     assert result.risk_level == "medium"
     assert result.conclusion.startswith("该场景涉及数据出境")
+    assert result.claims[0].supporting_chunk_ids == ["c1"]
     assert result.applicable_evidence
     assert result.citations[0].chunk_id == "c1"
 
@@ -338,6 +346,12 @@ def test_result_generation_prompt_receives_trace_context() -> None:
             {
                 "risk_level": "medium",
                 "conclusion": "需要结合材料和证据补充确认。",
+                "claims": [
+                    {
+                        "text": "需要结合材料和证据补充确认。",
+                        "supporting_chunk_ids": ["c1"],
+                    }
+                ],
                 "trigger_reasons": ["cross_border_transfer"],
                 "missing_information": [],
                 "recommended_actions": ["补充确认"],
@@ -362,3 +376,39 @@ def test_result_generation_prompt_receives_trace_context() -> None:
     prompt = client.calls[0][-1].content
     assert "是否需要数据出境安全评估" in prompt
     assert "手机号发送给新加坡服务商" in prompt
+
+
+def test_result_generation_rejects_unknown_claim_support_id() -> None:
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "medium",
+                "conclusion": "该场景涉及数据出境。",
+                "claims": [
+                    {
+                        "text": "该场景涉及数据出境。",
+                        "supporting_chunk_ids": ["missing_chunk"],
+                    }
+                ],
+                "trigger_reasons": ["cross_border_transfer"],
+                "missing_information": [],
+                "recommended_actions": ["补充确认"],
+                "risk_boundaries": ["基于当前材料。"],
+            }
+        ]
+    )
+
+    with pytest.raises(ReviewWorkflowFailed) as exc_info:
+        build_review_result_with_deepseek(
+            review_result_id="result_1",
+            review_case_id="review_1",
+            trace_id="trace_1",
+            facts=ReviewFacts(cross_border_transfer=True),
+            self_check=EvidenceSelfCheck(status="sufficient"),
+            evidence_hits=[_hit()],
+            client=client,  # type: ignore[arg-type]
+            max_retries=0,
+        )
+
+    assert exc_info.value.reason == "claim_grounding_validation_failed"
+    assert "missing_chunk" in exc_info.value.message

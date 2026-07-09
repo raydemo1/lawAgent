@@ -165,6 +165,13 @@ class CitationGroup(StrictModel):
     scope_note: str | None = None
 
 
+class GroundedClaim(StrictModel):
+    """One conclusion claim and the evidence chunks that support it."""
+
+    text: str
+    supporting_chunk_ids: list[str] = Field(default_factory=list)
+
+
 class ReviewResult(StrictModel):
     """Structured review result produced from facts and evidence."""
 
@@ -178,6 +185,7 @@ class ReviewResult(StrictModel):
     missing_information: list[str] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     risk_boundaries: list[str] = Field(default_factory=list)
+    claims: list[GroundedClaim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
     applicable_evidence: list[CitationGroup] = Field(default_factory=list)
 

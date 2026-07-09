@@ -18,16 +18,19 @@ from __future__ import annotations
 
 import json
 
+from pydantic import Field
+
 from law_agent.config import require_llm_config
 from law_agent.data.schemas import Chunk
 from law_agent.data.schemas import StrictModel
 from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
 from law_agent.review.citations import group_citations
-from law_agent.review.llm import StructuredLLMNode
+from law_agent.review.llm import ReviewWorkflowFailed, StructuredLLMNode
 from law_agent.review.schemas import (
     Citation,
     CitationGroup,
     EvidenceSelfCheck,
+    GroundedClaim,
     ReviewFacts,
     ReviewResult,
     RetrievalHit,
@@ -50,6 +53,7 @@ class LLMReviewResultDraft(StrictModel):
 
     risk_level: RiskLevel
     conclusion: str
+    claims: list[GroundedClaim] = Field(min_length=1)
     trigger_reasons: list[str]
     missing_information: list[str]
     recommended_actions: list[str]
@@ -286,6 +290,76 @@ def build_risk_boundaries(facts: ReviewFacts, risk_level: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Claim grounding
+# ---------------------------------------------------------------------------
+
+def _split_claim_sentences(text: str) -> list[str]:
+    """Split a conclusion into displayable claim sentences."""
+
+    sentences: list[str] = []
+    current: list[str] = []
+    for char in text.strip():
+        current.append(char)
+        if char in "。！？!?":
+            sentence = "".join(current).strip()
+            if sentence:
+                sentences.append(sentence)
+            current = []
+    tail = "".join(current).strip()
+    if tail:
+        sentences.append(tail)
+    return sentences or ([text.strip()] if text.strip() else [])
+
+
+def build_rule_grounded_claims(
+    conclusion: str,
+    evidence_hits: list[RetrievalHit],
+) -> list[GroundedClaim]:
+    """Ground rule-built conclusion sentences to the current evidence ids."""
+
+    supporting_ids: list[str] = []
+    seen: set[str] = set()
+    for hit in evidence_hits:
+        if hit.chunk_id in seen:
+            continue
+        supporting_ids.append(hit.chunk_id)
+        seen.add(hit.chunk_id)
+        if len(supporting_ids) >= 3:
+            break
+
+    return [
+        GroundedClaim(text=sentence, supporting_chunk_ids=supporting_ids)
+        for sentence in _split_claim_sentences(conclusion)
+    ]
+
+
+def validate_grounded_claims(
+    claims: list[GroundedClaim],
+    evidence_hits: list[RetrievalHit],
+) -> list[GroundedClaim]:
+    """Ensure every claim support id points at a current evidence chunk."""
+
+    allowed_ids = {hit.chunk_id for hit in evidence_hits}
+    invalid_ids = sorted(
+        {
+            chunk_id
+            for claim in claims
+            for chunk_id in claim.supporting_chunk_ids
+            if chunk_id not in allowed_ids
+        }
+    )
+    empty_claims = [claim.text for claim in claims if not claim.supporting_chunk_ids]
+    if invalid_ids or empty_claims:
+        details = {
+            "invalid_supporting_chunk_ids": invalid_ids,
+            "empty_claims": empty_claims,
+            "allowed_chunk_ids": sorted(allowed_ids),
+        }
+        raise ValueError(f"claim grounding validation failed: {details}")
+    return claims
+
+
+# ---------------------------------------------------------------------------
 # Full result builder
 # ---------------------------------------------------------------------------
 
@@ -325,6 +399,7 @@ def build_review_result(
     trigger_reasons = build_trigger_reasons(facts, risk_level)
     recommended_actions = build_recommended_actions(facts, risk_level, self_check)
     risk_boundaries = build_risk_boundaries(facts, risk_level)
+    claims = build_rule_grounded_claims(conclusion, evidence_hits)
 
     # Flatten citations from groups
     all_citations: list[Citation] = []
@@ -342,6 +417,7 @@ def build_review_result(
         missing_information=facts.missing_information,
         recommended_actions=recommended_actions,
         risk_boundaries=risk_boundaries,
+        claims=claims,
         citations=all_citations,
         applicable_evidence=citation_groups,
     )
@@ -367,6 +443,16 @@ def build_result_generation_messages(
     json_example = {
         "risk_level": "medium",
         "conclusion": "该场景可能涉及个人信息跨境提供，但仍需补充数据规模和同意情况。",
+        "claims": [
+            {
+                "text": "该场景可能涉及个人信息跨境提供。",
+                "supporting_chunk_ids": ["chunk_id_from_evidence_packets"],
+            },
+            {
+                "text": "仍需补充数据规模和同意情况。",
+                "supporting_chunk_ids": ["another_chunk_id_from_evidence_packets"],
+            },
+        ],
         "trigger_reasons": ["cross_border_transfer", "missing_information"],
         "missing_information": ["legal_basis_or_consent", "data_volume_threshold"],
         "recommended_actions": ["确认是否取得单独同意", "确认出境数据规模"],
@@ -420,6 +506,8 @@ def build_result_generation_messages(
             "当 evidence_self_check.status 为 sufficient，且材料至少包含一个实质法律维度（如数据类型、处理目的、跨境安排、地区、行业、个人信息/敏感信息），通常不应输出 insufficient_evidence。",
             "必须输出合法 json object，字段必须与 json_example 完全一致。",
             "risk_level 只能是 high、medium、low、insufficient_evidence。",
+            "claims 必须逐句覆盖 conclusion 中的关键判断；每个 claim.text 是一个可单独展示的结论句。",
+            "每个 claims[].supporting_chunk_ids 必须只使用 evidence_packets 中真实存在的 chunk_id，且不能为空。",
             "evidence_self_check.status=sufficient 表示证据可用于当前语料范围内的判断；若事实有缺口但仍可形成边界判断，不要拒答。",
             "insufficient_evidence 只适用于：证据自检 insufficient、材料几乎没有可审查事实、问题超出 corpus_scope、或证据与问题/材料明显不匹配。",
             "不得编造未出现在证据中的法律来源。",
@@ -486,18 +574,28 @@ def build_review_result_with_deepseek(
         max_retries=max_retries,
         trace_id=trace_id,
     )
-    draft = node.run(
-        build_result_generation_messages(
-            facts=facts,
-            self_check=self_check,
-            evidence_hits=evidence_hits,
-            question=question,
-            material_text=material_text,
-            retrieval_queries=retrieval_queries,
-            second_retrieval=second_retrieval,
-            source_evidence_packets=source_evidence_packets,
+    try:
+        draft = node.run(
+            build_result_generation_messages(
+                facts=facts,
+                self_check=self_check,
+                evidence_hits=evidence_hits,
+                question=question,
+                material_text=material_text,
+                retrieval_queries=retrieval_queries,
+                second_retrieval=second_retrieval,
+                source_evidence_packets=source_evidence_packets,
+            )
         )
-    )
+        claims = validate_grounded_claims(draft.claims, evidence_hits)
+    except ValueError as exc:
+        raise ReviewWorkflowFailed(
+            failed_node="result_generation",
+            reason="claim_grounding_validation_failed",
+            message=str(exc),
+            attempts=1,
+            trace_id=trace_id,
+        ) from exc
 
     citation_groups, _violations = group_citations(evidence_hits, facts, chunks_by_id)
     all_citations: list[Citation] = []
@@ -515,6 +613,7 @@ def build_review_result_with_deepseek(
         missing_information=draft.missing_information,
         recommended_actions=draft.recommended_actions,
         risk_boundaries=draft.risk_boundaries,
+        claims=claims,
         citations=all_citations,
         applicable_evidence=citation_groups,
     )

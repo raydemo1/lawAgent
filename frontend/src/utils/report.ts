@@ -105,6 +105,23 @@ function citationsToMarkdown(
     .join('\n\n');
 }
 
+function claimsToMarkdown(
+  claims: { text: string; supporting_chunk_ids: string[] }[],
+  chunks: Map<string, RetrievalHit>,
+): string {
+  if (claims.length === 0) return '';
+  const lines = ['**结论逐句依据：**'];
+  claims.forEach((claim, index) => {
+    const refs = claim.supporting_chunk_ids.map((chunkId) => {
+      const chunk = chunks.get(chunkId);
+      return chunk ? `${chunk.title} / ${chunk.chunk_id}` : chunkId;
+    });
+    lines.push(`${index + 1}. ${mdEscape(claim.text)}`);
+    lines.push(`   - 支撑 chunk：${refs.length > 0 ? refs.map(mdEscape).join('；') : '—'}`);
+  });
+  return lines.join('\n');
+}
+
 export function buildMarkdownReport(saved: SavedCase): string {
   const { response, question, materialText, feedback, isBadCase, badCaseReason, savedAt } = saved;
   const lines: string[] = [];
@@ -190,6 +207,11 @@ export function buildMarkdownReport(saved: SavedCase): string {
   lines.push('');
   lines.push(result.conclusion);
   lines.push('');
+  const groundedClaims = claimsToMarkdown(result.claims, chunks);
+  if (groundedClaims) {
+    lines.push(groundedClaims);
+    lines.push('');
+  }
 
   if (result.trigger_reasons.length > 0) {
     lines.push('## 七、触发原因');
@@ -281,6 +303,9 @@ th{background:#1e3a8a;color:#fff;}
 tr:nth-child(even){background:#f1f5f9;}
 pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow-x:auto;font-size:13px;}
 blockquote{border-left:4px solid #b45309;background:rgba(180,83,9,.05);margin:10px 0;padding:10px 16px;color:#334155;}
+.claim{background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;margin:8px 0;}
+.claim-text{font-weight:600;color:#334155;}
+.claim-refs{font-size:12px;color:#64748b;margin-top:4px;}
 .cite{background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px 14px;margin:10px 0;}
 .cite-title{font-weight:700;color:#0f172a;}
 .cite-meta{font-size:12px;color:#64748b;margin-top:4px;}
@@ -349,6 +374,26 @@ function citationsToHtml(
       return `<h3>${escHtml(USAGE_LABELS[group.usage])}（${group.citations.length} 条）</h3>${scope}${items}`;
     })
     .join('');
+}
+
+function claimsToHtml(
+  claims: { text: string; supporting_chunk_ids: string[] }[],
+  chunks: Map<string, RetrievalHit>,
+): string {
+  if (claims.length === 0) return '';
+  const items = claims
+    .map((claim, index) => {
+      const refs = claim.supporting_chunk_ids.map((chunkId) => {
+        const chunk = chunks.get(chunkId);
+        return chunk ? `${chunk.title} / ${chunk.chunk_id}` : chunkId;
+      });
+      return `<div class="claim">
+        <div class="claim-text">${index + 1}. ${escHtml(claim.text)}</div>
+        <div class="claim-refs">支撑 chunk：${refs.length > 0 ? escHtml(refs.join('；')) : '—'}</div>
+      </div>`;
+    })
+    .join('');
+  return `<p><strong>结论逐句依据：</strong></p>${items}`;
 }
 
 export function buildHtmlReport(saved: SavedCase): string {
@@ -427,6 +472,7 @@ export function buildHtmlReport(saved: SavedCase): string {
   parts.push('<h2>六、审查结论</h2>');
   parts.push(`<p><span class="risk risk-${escHtml(result.risk_level)}">${escHtml(RISK_LABELS[result.risk_level])}</span></p>`);
   parts.push(`<p>${escHtml(result.conclusion)}</p>`);
+  parts.push(claimsToHtml(result.claims, chunks));
 
   let idx = 7;
   if (result.trigger_reasons.length > 0) {

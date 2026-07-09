@@ -143,6 +143,12 @@ export interface CitationGroup {
   scope_note: string | null;
 }
 
+/** One conclusion claim and the evidence chunks that support it. */
+export interface GroundedClaim {
+  text: string;
+  supporting_chunk_ids: string[];
+}
+
 /**
  * A specific evidence sufficiency issue detected during self-check.
  *
@@ -244,6 +250,7 @@ export interface ReviewResult {
   missing_information: string[];
   recommended_actions: string[];
   risk_boundaries: string[];
+  claims: GroundedClaim[];
   citations: Citation[];
   /** Evidence grouped by usage category. */
   applicable_evidence: CitationGroup[];

@@ -26,6 +26,7 @@ import type {
 import { isReviewFailedResponse } from '../types/api';
 import { validateUploadFile } from '../api/client';
 import RiskBadge from './RiskBadge';
+import GroundedClaims from './GroundedClaims';
 
 export interface WorkbenchPageProps {
   /** Current review question (controlled). */
@@ -193,6 +194,7 @@ export default function WorkbenchPage({
   const facts = successResult?.review_facts ?? null;
   const citationGroups = successResult?.citation_groups ?? [];
   const evidenceSelfCheck = successResult?.evidence_self_check ?? null;
+  const evidenceChunks = successResult?.evidence_chunks ?? [];
 
   return (
     <div className="workbench">
@@ -423,6 +425,10 @@ export default function WorkbenchPage({
               <p style={{ fontSize: '0.9375rem', lineHeight: 1.6 }}>
                 {reviewResult.conclusion}
               </p>
+              <GroundedClaims
+                claims={reviewResult.claims}
+                evidenceChunks={evidenceChunks}
+              />
             </div>
           </div>
 
