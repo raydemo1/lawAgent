@@ -1,8 +1,23 @@
 # LawAgent
 
-LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。
+[![CI](https://github.com/raydemo1/lawAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/raydemo1/lawAgent/actions/workflows/ci.yml)
 
-项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言；[docs/data-governance-design.md](docs/data-governance-design.md) 记录数据治理设计；[docs/adr](docs/adr) 记录稳定架构决策。
+LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 Case Analyst、Evidence Researcher、Compliance Reviewer 和条件式 Evidence Critic 协作，Critic 最多触发一次修订。
+
+项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[两阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
+
+## Full evaluation result
+
+| Metric | Single workflow | Multi-Agent |
+|---|---:|---:|
+| Recall@5 | 0.8059 | 0.8364 |
+| MRR@10 | 0.8618 | 0.8618 |
+| Abstention accuracy | 0.9756 | 0.9878 |
+| Citation violations | 0 | 0 |
+| Mean total latency | 57.00 s | 65.89 s |
+| Total LLM calls | 164 | 214 |
+
+两轮均使用相同 82 case、冻结 facts/query、真实 service 检索、DeepSeek Flash、rerank off 和 8 workers。详细解释与限制见[实验对比报告](docs/evaluation/phase-comparison.md)。
 
 ## 开发命令
 
@@ -80,13 +95,13 @@ npm run dev
 快速 smoke：
 
 ```powershell
-python -m law_agent.review eval --suite quick --retrieval-mode service --review-mode llm --max-workers 4 --output artifacts/review_runs/eval_quick_service.json
+python -m law_agent.review eval --suite quick --retrieval-mode service --review-mode llm --max-workers 8 --output artifacts/review_runs/eval_quick_service.json --report artifacts/review_runs/eval_quick_service.md
 ```
 
 完整验证：
 
 ```powershell
-python -m law_agent.review eval --suite full --retrieval-mode service --review-mode llm --max-workers 4 --output artifacts/review_runs/eval_full_service.json
+python -m law_agent.review eval --suite full --retrieval-mode service --review-mode multi_agent --max-workers 8 --output artifacts/review_runs/eval_full_service.json --report artifacts/review_runs/eval_full_service.md
 ```
 
 评测汇总会包含检索质量指标，以及 `mean_total_latency_ms`、`mean_retrieval_latency_ms`、`total_llm_calls`、`total_retries`。

@@ -404,6 +404,7 @@ def run_hybrid_retrieval(
     total_started = time.perf_counter()
     case, target_trace, traces = _load_case_and_trace(case_id, output_dir)
     facts = case.review_facts
+    research_calls_before = current_telemetry().llm_call_count
     multi_agent = review_mode == "multi_agent"
     issue_plan = build_issue_plan(target_trace.queries) if multi_agent else None
     agent_steps: list[AgentStep] = []
@@ -637,7 +638,7 @@ def run_hybrid_retrieval(
                 status="completed",
                 decision=f"built {len(evidence_dossiers)} dossiers",
                 latency_ms=retrieval_latency_ms,
-                llm_calls=current_telemetry().llm_call_count,
+                llm_calls=current_telemetry().llm_call_count - research_calls_before,
             )
         )
 

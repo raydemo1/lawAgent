@@ -763,6 +763,10 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
     assert revision_inputs == [None, ["收窄结论"]]
     assert trace.critique_decision is not None
     assert trace.critique_decision.decision == "revise"
+    researcher_step = next(
+        step for step in trace.agent_steps if step.agent_name == "evidence_researcher"
+    )
+    assert researcher_step.llm_calls == 0
     assert [step.agent_name for step in trace.agent_steps] == [
         "case_analyst",
         "evidence_researcher",

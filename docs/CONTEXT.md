@@ -49,11 +49,11 @@ _Avoid_: 直接向量化, 手工整理干净文本
 _Avoid_: 只展示最终 chunk, 不可解释清洗
 
 **Agentic Workflow**:
-第一版采用的在线问答形态，用显式工作流节点完成意图识别、查询改写、混合检索、证据自检、二次召回、引用校验和拒答，而不是让多个自治 Agent 自由对话。
-_Avoid_: 真多 Agent, 角色扮演式 Agent 协作, 黑盒工具调用
+采用确定性 Supervisor 的在线审查形态，用显式工作流节点完成事实抽取、问题规划、混合检索、证据自检、二次召回、结果审查、引用校验和拒答。复杂场景可以启用有界 Multi-Agent：Case Analyst 和 Evidence Researcher 复用既有事实/查询/检索结果，Compliance Reviewer 生成结果，Evidence Critic 只在高风险或复杂场景检查证据越界并最多要求一次修订；不允许多个自治 Agent 自由对话。
+_Avoid_: 无限 Agent 对话, 角色扮演式协作, 黑盒工具调用, 无终止条件的反思循环
 
 **LLM-owned Review Workflow**:
-材料驱动合规审查的 LLM 主导形态。审查事实抽取、query planning、证据自检和结构化审查结果由 LLM 节点负责；程序负责 schema 校验、引用门禁、trace、检索后端调用和错误上抛。当前实现先只接入 DeepSeek，不引入多 provider 能力字段；每个 LLM 节点 prompt 必须给出目标 JSON 示例，LLM 输出按 JSON prompt 约束后直接走 Pydantic 严格校验和节点级 retry。LLM 节点可以按配置重试，但重试耗尽后必须显式失败，不用规则路径静默兜底。第一版节点顺序固定为：fact extraction、query planning、retrieval、evidence check、可选 supplemental retrieval、result generation、citation gate；不要再拆出独立 risk classifier、missing info detector 或 recommendation generator。
+材料驱动合规审查的 LLM 主导形态。审查事实抽取、query planning、证据自检、结构化审查结果和条件式 Evidence Critic 由 LLM 节点负责；程序负责 schema 校验、引用门禁、trace、检索后端调用、Critic 触发条件、单次修订上限和错误上抛。当前实现先只接入 DeepSeek，不引入多 provider 能力字段；每个 LLM 节点 prompt 必须给出目标 JSON 示例，LLM 输出按 JSON prompt 约束后直接走 Pydantic 严格校验和节点级 retry。LLM 节点可以按配置重试，但重试耗尽后必须显式失败，不用规则路径静默兜底。不要再拆出独立 risk classifier、missing info detector 或 recommendation generator。
 _Avoid_: 规则隐性 fallback, 模型失败后继续产出伪结果, 把规则判断混进线上 LLM 模式
 
 **二次召回**:
