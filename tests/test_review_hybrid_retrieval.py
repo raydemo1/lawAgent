@@ -696,6 +696,82 @@ def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     assert trace.metadata_boosts  # boost summary recorded
 
 
+def test_multi_agent_runs_one_critic_revision_and_records_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from law_agent.review.schemas import (
+        CritiqueDecision,
+        EvidenceSelfCheck,
+        ReviewResult,
+    )
+    from law_agent.review.service import create_review_case, run_hybrid_retrieval
+
+    chunks_path = _write_fixture_corpus(tmp_path)
+    response = create_review_case(
+        question="这个场景是否需要数据出境安全评估？",
+        material_text="手机号和定位信息发送给新加坡服务商。",
+        output_dir=tmp_path,
+        now=lambda: "2026-07-06T00:00:00+00:00",
+        id_factory=lambda prefix: f"{prefix}_test",
+    )
+    revision_inputs: list[list[str] | None] = []
+
+    monkeypatch.setattr(
+        "law_agent.review.service.run_self_check_with_deepseek",
+        lambda *args, **kwargs: EvidenceSelfCheck(status="sufficient"),
+    )
+    monkeypatch.setattr(
+        "law_agent.review.service.validate_llm_self_check",
+        lambda check, *args, **kwargs: check,
+    )
+
+    def fake_build_result(**kwargs):
+        revision_inputs.append(kwargs.get("critique_instructions"))
+        return ReviewResult(
+            review_result_id="result_test",
+            review_case_id="review_test",
+            trace_id="trace_test",
+            risk_level="high",
+            conclusion="需要进一步核验。",
+            review_facts=response.review_case.review_facts,
+        )
+
+    monkeypatch.setattr(
+        "law_agent.review.service.build_review_result_with_deepseek",
+        fake_build_result,
+    )
+    monkeypatch.setattr(
+        "law_agent.review.service.run_evidence_critic",
+        lambda **kwargs: CritiqueDecision(
+            decision="revise",
+            unsupported_claims=["结论过宽"],
+            missing_issue_ids=[],
+            revision_instructions=["收窄结论"],
+            reason="证据只支持条件性判断",
+        ),
+    )
+
+    trace = run_hybrid_retrieval(
+        case_id="review_test",
+        chunks_path=chunks_path,
+        output_dir=tmp_path,
+        top_k=5,
+        review_mode="multi_agent",
+    )
+
+    assert revision_inputs == [None, ["收窄结论"]]
+    assert trace.critique_decision is not None
+    assert trace.critique_decision.decision == "revise"
+    assert [step.agent_name for step in trace.agent_steps] == [
+        "case_analyst",
+        "evidence_researcher",
+        "compliance_reviewer",
+        "evidence_critic",
+        "compliance_revision",
+    ]
+
+
 def test_run_hybrid_retrieval_uses_wide_candidate_pool_before_final_top_k(
     tmp_path: Path,
 ) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from law_agent.data.schemas import ClauseCitationRole, StrictModel
 
@@ -180,6 +180,63 @@ class GroundedClaim(StrictModel):
     supporting_chunk_ids: list[str] = Field(default_factory=list)
 
 
+class ReviewIssue(StrictModel):
+    """One bounded legal issue identified by the case analyst."""
+
+    issue_id: str
+    question: str
+    query_ids: list[str] = Field(default_factory=list)
+    query_types: list[RetrievalQueryType] = Field(default_factory=list)
+    priority: Literal["high", "medium", "low"] = "medium"
+
+
+class IssuePlan(StrictModel):
+    """Deterministic case-analyst output consumed by research and critique."""
+
+    issues: list[ReviewIssue] = Field(default_factory=list, max_length=5)
+
+
+class EvidenceDossier(StrictModel):
+    """Evidence gathered for one review issue."""
+
+    issue_id: str
+    evidence_chunk_ids: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    evidence_gap: bool = False
+
+
+class CritiqueDecision(StrictModel):
+    """Evidence critic decision; at most one revision is allowed."""
+
+    decision: Literal["approve", "revise"]
+    unsupported_claims: list[str] = Field(default_factory=list)
+    missing_issue_ids: list[str] = Field(default_factory=list)
+    revision_instructions: list[str] = Field(default_factory=list)
+    reason: str
+
+    @model_validator(mode="after")
+    def revision_requires_instructions(self) -> "CritiqueDecision":
+        if self.decision == "revise" and not self.revision_instructions:
+            raise ValueError("revise decision requires revision_instructions")
+        return self
+
+
+class AgentStep(StrictModel):
+    """Compact trace record for one deterministic or LLM-owned agent step."""
+
+    agent_name: Literal[
+        "case_analyst",
+        "evidence_researcher",
+        "compliance_reviewer",
+        "evidence_critic",
+        "compliance_revision",
+    ]
+    status: Literal["completed", "skipped", "failed"]
+    decision: str | None = None
+    latency_ms: int = 0
+    llm_calls: int = 0
+
+
 class ReviewResult(StrictModel):
     """Structured review result produced from facts and evidence."""
 
@@ -237,6 +294,10 @@ class RetrievalTrace(StrictModel):
     final_evidence: list[RetrievalHit] = Field(default_factory=list)
     source_evidence_packets: list[SourceEvidencePacket] = Field(default_factory=list)
     citation_validation: dict[str, object] = Field(default_factory=dict)
+    issue_plan: IssuePlan | None = None
+    evidence_dossiers: list[EvidenceDossier] = Field(default_factory=list)
+    critique_decision: CritiqueDecision | None = None
+    agent_steps: list[AgentStep] = Field(default_factory=list)
     latency_ms: int | None = None
     total_latency_ms: int | None = None
     retrieval_latency_ms: int | None = None

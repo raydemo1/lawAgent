@@ -205,7 +205,20 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     if args.report:
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(format_summary_markdown(summary), encoding="utf-8")
+        report_path.write_text(
+            format_summary_markdown(
+                summary,
+                run_config={
+                    "retrieval_mode": args.retrieval_mode,
+                    "review_mode": args.review_mode,
+                    "rerank_mode": args.rerank_mode,
+                    "max_workers": args.max_workers,
+                    "top_k": args.top_k,
+                    "eval_inputs": args.eval_inputs or "default",
+                },
+            ),
+            encoding="utf-8",
+        )
         print(f"Saved Markdown report to {report_path}")
 
     return 0
@@ -320,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", default=str(DEFAULT_REVIEW_RUNS_DIR))
     run.add_argument(
         "--mode",
-        choices=["rule_baseline", "llm"],
+        choices=["rule_baseline", "llm", "multi_agent"],
         default="rule_baseline",
         help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
     )
@@ -350,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retrieve.add_argument(
         "--mode",
-        choices=["rule_baseline", "llm"],
+        choices=["rule_baseline", "llm", "multi_agent"],
         default="rule_baseline",
         help="Review owner mode for hybrid evidence/result nodes.",
     )
@@ -391,7 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.add_argument(
         "--review-mode",
-        choices=["llm", "local"],
+        choices=["llm", "local", "multi_agent"],
         default="llm",
         help="Review owner for eval. Defaults to llm.",
     )
@@ -444,7 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument(
         "--mode",
-        choices=["rule_baseline", "llm"],
+        choices=["rule_baseline", "llm", "multi_agent"],
         default="llm",
         help="Review owner mode. llm uses DeepSeek nodes; rule_baseline is for comparison.",
     )

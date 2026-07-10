@@ -709,6 +709,7 @@ def build_result_generation_messages(
     second_retrieval: dict[str, object] | None = None,
     source_evidence_packets: list[SourceEvidencePacket] | None = None,
     output_format: Literal["plain", "markdown"] = "plain",
+    critique_instructions: list[str] | None = None,
 ) -> list[ChatMessage]:
     """Build a DeepSeek JSON prompt for structured review result generation.
 
@@ -883,6 +884,7 @@ def build_result_generation_messages(
             ],
         },
         "json_example": json_example,
+        "critique_instructions": critique_instructions or [],
         "instructions": [
             "基于审查事实和 evidence_packets 生成结构化审查结果。",
             "必须结合 question、material_excerpt、retrieval_queries 和 evidence_self_check 判断结论边界。",
@@ -901,6 +903,7 @@ def build_result_generation_messages(
             "不得编造未出现在证据中的法律来源。",
             "优先依据 representative_chunk；supporting_chunks 用于补充同一来源内更精确的条款；neighbor_chunks 只用于理解上下文。",
             "引用分组由程序处理，本节点不要输出 citations。",
+            "如果 critique_instructions 非空，必须逐条修正，但不得引入 evidence_packets 之外的新依据。",
             format_instruction_replacements[2],
         ],
     }
@@ -947,6 +950,7 @@ def build_review_result_with_deepseek(
     client: OpenAICompatibleClient | None = None,
     max_retries: int | None = None,
     output_format: Literal["plain", "markdown"] = "plain",
+    critique_instructions: list[str] | None = None,
 ) -> ReviewResult:
     """Build a governed ReviewResult using DeepSeek for result content.
 
@@ -1002,6 +1006,7 @@ def build_review_result_with_deepseek(
                 second_retrieval=second_retrieval,
                 source_evidence_packets=source_evidence_packets,
                 output_format=output_format,
+                critique_instructions=critique_instructions,
             ),
             post_validate=validate_draft_grounding,
             post_validation_reason="claim_grounding_validation_failed",

@@ -72,7 +72,7 @@ export type RetrieverName =
 export type EvalRetrievalMode = 'service' | 'local';
 
 /** Evaluation review owner under test. */
-export type EvalReviewMode = 'llm' | 'local';
+export type EvalReviewMode = 'llm' | 'local' | 'multi_agent';
 
 /** Optional post-fusion reranker arm for A/B evaluation. */
 export type EvalRerankMode = 'off' | 'embedding';

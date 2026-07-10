@@ -14,6 +14,12 @@ from law_agent.review.evidence import (
     run_self_check_with_deepseek,
     validate_llm_self_check,
 )
+from law_agent.review.agents import (
+    build_evidence_dossiers,
+    build_issue_plan,
+    run_evidence_critic,
+    should_run_evidence_critic,
+)
 from law_agent.review.facts import (
     FactsExtractor,
     extract_facts,
@@ -52,6 +58,7 @@ from law_agent.review.retrieval.rerank import rerank_hits
 from law_agent.review.retrieval.vector_mock import VectorMockRetriever
 from law_agent.review.schemas import (
     EvidenceSelfCheck,
+    AgentStep,
     MaterialRecord,
     ReviewCase,
     ReviewFacts,
@@ -68,7 +75,7 @@ DEFAULT_REVIEW_RUNS_DIR = Path("data/review_runs")
 PLACEHOLDER_CONCLUSION = "Review case created. Evidence retrieval has not run yet."
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_TOP_K = 50
-ReviewMode = Literal["rule_baseline", "llm"]
+ReviewMode = Literal["rule_baseline", "llm", "multi_agent"]
 ResultFormat = Literal["plain", "markdown"]
 DEFAULT_SUPPORTING_CHUNKS_PER_SOURCE = 2
 
@@ -117,11 +124,15 @@ def create_review_case(
 
     if facts_extractor is None:
         facts_extractor = (
-            extract_facts_with_deepseek if review_mode == "llm" else extract_facts
+            extract_facts_with_deepseek
+            if review_mode in ("llm", "multi_agent")
+            else extract_facts
         )
     if query_planner is None:
         query_planner = (
-            plan_queries_with_deepseek if review_mode == "llm" else plan_queries
+            plan_queries_with_deepseek
+            if review_mode in ("llm", "multi_agent")
+            else plan_queries
         )
 
     facts = facts_extractor(material.material_text, question)
@@ -393,6 +404,17 @@ def run_hybrid_retrieval(
     total_started = time.perf_counter()
     case, target_trace, traces = _load_case_and_trace(case_id, output_dir)
     facts = case.review_facts
+    multi_agent = review_mode == "multi_agent"
+    issue_plan = build_issue_plan(target_trace.queries) if multi_agent else None
+    agent_steps: list[AgentStep] = []
+    if issue_plan is not None:
+        agent_steps.append(
+            AgentStep(
+                agent_name="case_analyst",
+                status="completed",
+                decision=f"planned {len(issue_plan.issues)} issues",
+            )
+        )
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
@@ -466,7 +488,7 @@ def run_hybrid_retrieval(
     boosts_summary = compute_boosts_summary(facts, query_types)
 
     # Issue 7: Evidence self-check
-    if review_mode == "llm":
+    if review_mode in ("llm", "multi_agent"):
         self_check = run_self_check_with_deepseek(
             hybrid_hits,
             facts,
@@ -603,8 +625,25 @@ def run_hybrid_retrieval(
 
     # Issue 8: Build governed review result
     result_evidence = flatten_source_evidence_packets(source_evidence_packets)
+    evidence_dossiers = (
+        build_evidence_dossiers(issue_plan, result_evidence)
+        if issue_plan is not None
+        else []
+    )
+    if multi_agent:
+        agent_steps.append(
+            AgentStep(
+                agent_name="evidence_researcher",
+                status="completed",
+                decision=f"built {len(evidence_dossiers)} dossiers",
+                latency_ms=retrieval_latency_ms,
+                llm_calls=current_telemetry().llm_call_count,
+            )
+        )
 
-    if review_mode == "llm":
+    if review_mode in ("llm", "multi_agent"):
+        reviewer_started = time.perf_counter()
+        reviewer_calls_before = current_telemetry().llm_call_count
         review_result = build_review_result_with_deepseek(
             review_result_id=case.latest_result_id or make_id("result"),
             review_case_id=case_id,
@@ -620,6 +659,15 @@ def run_hybrid_retrieval(
             source_evidence_packets=source_evidence_packets,
             output_format=output_format,
         )
+        if multi_agent:
+            agent_steps.append(
+                AgentStep(
+                    agent_name="compliance_reviewer",
+                    status="completed",
+                    latency_ms=int((time.perf_counter() - reviewer_started) * 1000),
+                    llm_calls=current_telemetry().llm_call_count - reviewer_calls_before,
+                )
+            )
     else:
         review_result = build_review_result(
             review_result_id=case.latest_result_id or make_id("result"),
@@ -630,6 +678,63 @@ def run_hybrid_retrieval(
             evidence_hits=result_evidence,
             chunks_by_id=chunks_by_id,
         )
+
+    critique_decision = None
+    if multi_agent and issue_plan is not None:
+        if should_run_evidence_critic(review_result, self_check, issue_plan):
+            critic_started = time.perf_counter()
+            critic_calls_before = current_telemetry().llm_call_count
+            critique_decision = run_evidence_critic(
+                result=review_result,
+                issue_plan=issue_plan,
+                dossiers=evidence_dossiers,
+                evidence_hits=result_evidence,
+            )
+            agent_steps.append(
+                AgentStep(
+                    agent_name="evidence_critic",
+                    status="completed",
+                    decision=critique_decision.decision,
+                    latency_ms=int((time.perf_counter() - critic_started) * 1000),
+                    llm_calls=current_telemetry().llm_call_count - critic_calls_before,
+                )
+            )
+            if critique_decision.decision == "revise":
+                revision_started = time.perf_counter()
+                revision_calls_before = current_telemetry().llm_call_count
+                review_result = build_review_result_with_deepseek(
+                    review_result_id=case.latest_result_id or make_id("result"),
+                    review_case_id=case_id,
+                    trace_id=target_trace.trace_id,
+                    facts=facts,
+                    self_check=self_check,
+                    evidence_hits=result_evidence,
+                    chunks_by_id=chunks_by_id,
+                    question=case.question,
+                    material_text=case.material.material_text,
+                    retrieval_queries=updated_trace.queries,
+                    second_retrieval=updated_trace.second_retrieval,
+                    source_evidence_packets=source_evidence_packets,
+                    output_format=output_format,
+                    critique_instructions=critique_decision.revision_instructions,
+                )
+                agent_steps.append(
+                    AgentStep(
+                        agent_name="compliance_revision",
+                        status="completed",
+                        decision="revised once",
+                        latency_ms=int((time.perf_counter() - revision_started) * 1000),
+                        llm_calls=current_telemetry().llm_call_count - revision_calls_before,
+                    )
+                )
+        else:
+            agent_steps.append(
+                AgentStep(
+                    agent_name="evidence_critic",
+                    status="skipped",
+                    decision="simple low-risk case",
+                )
+            )
 
     # Persist updated result
     from law_agent.review.io import read_review_results
@@ -655,6 +760,10 @@ def run_hybrid_retrieval(
             "retrieval_latency_ms": retrieval_latency_ms,
             "llm_call_count": telemetry.llm_call_count,
             "retry_count": telemetry.retry_count,
+            "issue_plan": issue_plan,
+            "evidence_dossiers": evidence_dossiers,
+            "critique_decision": critique_decision,
+            "agent_steps": agent_steps,
         }
     )
 

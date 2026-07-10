@@ -34,7 +34,7 @@ from law_agent.review.service import create_review_case, run_hybrid_retrieval
 from law_agent.review.schemas import ReviewFacts, RetrievalQuery
 
 RetrievalEvalMode = Literal["service", "local"]
-ReviewEvalMode = Literal["llm", "local"]
+ReviewEvalMode = Literal["llm", "local", "multi_agent"]
 DEFAULT_RETRIEVAL_MODE: RetrievalEvalMode = "service"
 DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
 DEFAULT_RERANK_MODE: RerankMode = "off"
@@ -77,7 +77,7 @@ def run_evaluation(
     eval_key = _eval_key(retrieval_mode, review_mode, rerank_mode)
     max_workers = max(1, max_workers)
     eval_inputs: dict[str, EvalCaseInput] = {}
-    if review_mode == "llm":
+    if review_mode in ("llm", "multi_agent"):
         resolved_inputs_path = _default_eval_inputs_path(
             suite=suite,
             cases_label=cases_label,
@@ -271,7 +271,9 @@ def _run_single_case(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
-        service_review_mode = "llm" if review_mode == "llm" else "rule_baseline"
+        service_review_mode = (
+            review_mode if review_mode in ("llm", "multi_agent") else "rule_baseline"
+        )
 
         facts_extractor = None
         query_planner = None
@@ -346,6 +348,16 @@ def _run_single_case(
                 "retrieval_latency_ms": trace.retrieval_latency_ms,
                 "llm_call_count": trace.llm_call_count,
                 "retry_count": trace.retry_count,
+                "issue_count": len(trace.issue_plan.issues) if trace.issue_plan else 0,
+                "critic_triggered": trace.critique_decision is not None,
+                "critic_revised": (
+                    trace.critique_decision is not None
+                    and trace.critique_decision.decision == "revise"
+                ),
+                "critic_reason": (
+                    trace.critique_decision.reason if trace.critique_decision else None
+                ),
+                "agent_steps": trace.agent_steps,
             }
         )
 
@@ -419,6 +431,10 @@ def format_summary_text(summary: EvalSummary) -> str:
                 f"  Mean retrieval latency: {metrics.mean_retrieval_latency_ms:.2f} ms"
             )
         lines.append(f"  LLM calls / retries: {metrics.total_llm_calls} / {metrics.total_retries}")
+        lines.append(f"  Workflow success rate: {metrics.workflow_success_rate:.4f}")
+        if metrics.critic_trigger_rate:
+            lines.append(f"  Critic trigger rate: {metrics.critic_trigger_rate:.4f}")
+            lines.append(f"  Critic revision rate: {metrics.critic_revision_rate:.4f}")
         lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
         if metrics.bad_case_taxonomy:
@@ -449,7 +465,11 @@ def format_summary_text(summary: EvalSummary) -> str:
     return "\n".join(lines)
 
 
-def format_summary_markdown(summary: EvalSummary) -> str:
+def format_summary_markdown(
+    summary: EvalSummary,
+    *,
+    run_config: dict[str, object] | None = None,
+) -> str:
     """Format an evaluation result as a durable Markdown report."""
 
     suite_title = summary.cases_path.title()
@@ -460,6 +480,10 @@ def format_summary_markdown(summary: EvalSummary) -> str:
         f"- Corpus: `{summary.chunks_path}`",
         f"- Cases: `{summary.cases_path}`",
     ]
+    if run_config:
+        lines.extend(["", "## Run configuration", ""])
+        for key, value in run_config.items():
+            lines.append(f"- {key}: `{value}`")
     for mode_name, metrics in summary.mode_metrics.items():
         lines.extend(
             [
@@ -481,6 +505,9 @@ def format_summary_markdown(summary: EvalSummary) -> str:
                 f"| Mean retrieval latency (ms) | {_optional_number(metrics.mean_retrieval_latency_ms)} |",
                 f"| Total LLM calls | {metrics.total_llm_calls} |",
                 f"| Total retries | {metrics.total_retries} |",
+                f"| Workflow success rate | {metrics.workflow_success_rate:.4f} |",
+                f"| Critic trigger rate | {metrics.critic_trigger_rate:.4f} |",
+                f"| Critic revision rate | {metrics.critic_revision_rate:.4f} |",
             ]
         )
         if metrics.bad_case_taxonomy:
