@@ -415,3 +415,130 @@ def test_result_generation_rejects_unknown_claim_support_id() -> None:
     # supporting ids, which is what we surface. The error message lists
     # the empty claim text rather than the dropped chunk id.
     assert "empty_claims" in exc_info.value.message
+
+
+def test_result_generation_retries_claim_grounding_validation() -> None:
+    reset_telemetry()
+    invalid = {
+        "risk_level": "medium",
+        "conclusion": "该场景涉及数据出境。",
+        "claims": [
+            {
+                "text": "该场景涉及数据出境。",
+                "supporting_chunk_ids": ["missing_chunk"],
+            }
+        ],
+        "trigger_reasons": ["cross_border_transfer"],
+        "missing_information": [],
+        "recommended_actions": ["补充确认"],
+        "risk_boundaries": ["基于当前材料。"],
+    }
+    valid = {
+        **invalid,
+        "claims": [
+            {
+                "text": "该场景涉及数据出境。",
+                "supporting_chunk_ids": ["c1"],
+            }
+        ],
+    }
+    client = FakeClient(outputs=[invalid, valid])
+
+    result = build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(cross_border_transfer=True),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=1,
+    )
+
+    assert result.claims[0].supporting_chunk_ids == ["c1"]
+    assert len(client.calls) == 2
+    assert "claim grounding" in client.calls[1][-1].content
+    assert current_telemetry().retry_count >= 1
+
+
+def test_result_generation_drops_ungrounded_material_fact_claim() -> None:
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "medium",
+                "conclusion": "材料描述数据出境，相关义务仍需核验。",
+                "claims": [
+                    {
+                        "text": "材料描述手机号发送给新加坡服务商。",
+                        "supporting_chunk_ids": ["missing_chunk"],
+                    },
+                    {
+                        "text": "数据出境义务需要依据适用法规核验。",
+                        "supporting_chunk_ids": ["c1"],
+                    },
+                ],
+                "trigger_reasons": ["cross_border_transfer"],
+                "missing_information": [],
+                "recommended_actions": ["补充确认"],
+                "risk_boundaries": ["基于当前材料。"],
+            }
+        ]
+    )
+
+    result = build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(cross_border_transfer=True),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert [claim.text for claim in result.claims] == [
+        "数据出境义务需要依据适用法规核验。"
+    ]
+    assert result.claims[0].supporting_chunk_ids == ["c1"]
+
+
+def test_result_generation_allows_empty_claim_rail_without_citable_evidence() -> None:
+    auxiliary_hit = _hit().model_copy(
+        update={
+            "can_cite_clause": False,
+            "citation_role": "implementation_reference",
+        }
+    )
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "medium",
+                "conclusion": "行业指南可以作为分类分级实施参考。",
+                "claims": [
+                    {
+                        "text": "行业指南提供了分类分级参考。",
+                        "supporting_chunk_ids": [auxiliary_hit.chunk_id],
+                    }
+                ],
+                "trigger_reasons": ["industry_guidance"],
+                "missing_information": [],
+                "recommended_actions": ["结合适用法规核验"],
+                "risk_boundaries": ["指南不是法条级依据。"],
+            }
+        ]
+    )
+
+    result = build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(industry="金融"),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[auxiliary_hit],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert result.claims == []
+    assert result.applicable_evidence
+    assert result.applicable_evidence[0].usage == "implementation_reference"

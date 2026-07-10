@@ -372,12 +372,16 @@ def validate_grounded_claims(
        references; they remain in the evidence panel as auxiliary evidence
        but cannot be inlined as clause citations in the conclusion.
 
-    A claim that loses all its supporting ids after filtering is a real
-    error worth surfacing.
+    Claims that only restate material facts may legitimately have no legal
+    chunk support, so they are omitted from the grounded-claim rail. The
+    result fails only when every emitted claim loses support; fabricating a
+    legal citation is never an acceptable fallback.
     """
 
     allowed_ids = {hit.chunk_id for hit in evidence_hits}
     citable_ids = {hit.chunk_id for hit in evidence_hits if hit.can_cite_clause}
+    if not citable_ids:
+        return []
     cleaned: list[GroundedClaim] = []
     empty_claims: list[str] = []
     for claim in claims:
@@ -391,7 +395,7 @@ def validate_grounded_claims(
         cleaned.append(
             claim.model_copy(update={"supporting_chunk_ids": valid_ids})
         )
-    if empty_claims:
+    if empty_claims and not cleaned:
         details = {
             "empty_claims": empty_claims,
             "allowed_chunk_ids": sorted(allowed_ids),
@@ -980,6 +984,13 @@ def build_review_result_with_deepseek(
         structured_output_mode=node_mode,
     )
     try:
+        def validate_draft_grounding(draft_to_validate):
+            validated_claims = validate_grounded_claims(
+                draft_to_validate.claims,
+                evidence_hits,
+            )
+            return draft_to_validate.model_copy(update={"claims": validated_claims})
+
         draft = node.run(
             build_result_generation_messages(
                 facts=facts,
@@ -991,7 +1002,9 @@ def build_review_result_with_deepseek(
                 second_retrieval=second_retrieval,
                 source_evidence_packets=source_evidence_packets,
                 output_format=output_format,
-            )
+            ),
+            post_validate=validate_draft_grounding,
+            post_validation_reason="claim_grounding_validation_failed",
         )
         # markdown path: sanitize the report text and use it as conclusion;
         # actions/boundaries/missing_info are empty (content lives inside report).

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -101,7 +101,13 @@ class StructuredLLMNode(Generic[ModelT]):
         # emit markdown inside string fields without strict_tool schema friction.
         self.structured_output_mode = structured_output_mode
 
-    def run(self, messages: Sequence[ChatMessage]) -> ModelT:
+    def run(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        post_validate: Callable[[ModelT], ModelT] | None = None,
+        post_validation_reason: str = "post_validation_failed",
+    ) -> ModelT:
         attempts_allowed = self.max_retries + 1
         last_reason = "llm_api_error"
         last_message = f"{self.node_name} failed"
@@ -116,7 +122,7 @@ class StructuredLLMNode(Generic[ModelT]):
                     model=self.model,
                     structured_output_mode=self.structured_output_mode,
                 )
-                return self.output_model.model_validate(raw, strict=True)
+                parsed = self.output_model.model_validate(raw, strict=True)
             except ValidationError as exc:
                 last_reason = "pydantic_validation_failed"
                 last_message = (
@@ -165,6 +171,35 @@ class StructuredLLMNode(Generic[ModelT]):
                         trace_id=self.trace_id,
                     ) from exc
                 record_retry()
+            else:
+                if post_validate is None:
+                    return parsed
+                try:
+                    return post_validate(parsed)
+                except ValueError as exc:
+                    last_reason = post_validation_reason
+                    last_message = str(exc)
+                    messages = [
+                        *messages,
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                "上一轮 JSON 通过了 schema，但 claim grounding 业务校验失败。"
+                                "请只重新输出符合 schema 的 JSON，并确保每个 claim 至少引用一个"
+                                "允许且可作为法条依据的 supporting_chunk_id。"
+                                f" validation_error={exc}"
+                            ),
+                        ),
+                    ]
+                    if attempt == attempts_allowed:
+                        raise ReviewWorkflowFailed(
+                            failed_node=self.node_name,
+                            reason=last_reason,
+                            message=last_message,
+                            attempts=attempt,
+                            trace_id=self.trace_id,
+                        ) from exc
+                    record_retry()
 
         raise ReviewWorkflowFailed(
             failed_node=self.node_name,
