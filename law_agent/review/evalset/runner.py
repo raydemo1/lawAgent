@@ -24,6 +24,7 @@ from law_agent.review.evalset.schemas import (
 )
 from law_agent.review.facts import extract_facts
 from law_agent.review.ids import utc_now_iso
+from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.io import (
     read_review_results,
 )
@@ -109,7 +110,7 @@ def run_evaluation(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             mode_results = list(
                 executor.map(
-                    lambda scenario: _run_single_case(
+                    lambda scenario: _run_single_case_safely(
                         scenario,
                         chunks_path,
                         retrieval_mode=retrieval_mode,
@@ -346,6 +347,32 @@ def _run_single_case(
                 "llm_call_count": trace.llm_call_count,
                 "retry_count": trace.retry_count,
             }
+        )
+
+
+def _run_single_case_safely(
+    scenario: EvalScenario,
+    chunks_path: Path | str,
+    **kwargs,
+) -> CaseMetricResult:
+    """Convert an exhausted workflow node into one bad case, not a lost suite."""
+
+    try:
+        return _run_single_case(scenario, chunks_path, **kwargs)
+    except ReviewWorkflowFailed as exc:
+        return CaseMetricResult(
+            case_id=scenario.case_id,
+            recall_at_3=0.0,
+            recall_at_5=0.0,
+            mrr_at_10=0.0,
+            citation_violation_count=0,
+            abstention_correct=False,
+            is_bad_case=True,
+            bad_reasons=[f"workflow_failed:{exc.failed_node}:{exc.reason}"],
+            bad_case_categories=["workflow_error"],
+            workflow_failed=True,
+            failed_node=exc.failed_node,
+            failure_reason=exc.reason,
         )
 
 

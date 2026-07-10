@@ -16,12 +16,14 @@ from law_agent.review.evalset.metrics import evaluate_case
 from law_agent.review.evalset.runner import (
     EvalCaseInput,
     _read_eval_inputs,
+    _run_single_case_safely,
     _run_single_case,
     format_summary_markdown,
     run_evaluation,
 )
 from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
 from law_agent.review.schemas import ReviewFacts, RetrievalQuery
+from law_agent.review.llm import ReviewWorkflowFailed
 import law_agent.review.evalset.runner as runner_module
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
@@ -201,6 +203,38 @@ def test_markdown_report_contains_core_metrics_and_bad_cases() -> None:
     assert "| Recall@5 | 0.8500 |" in report
     assert "| Citation violations | 0 |" in report
     assert "No bad cases" in report
+
+
+def test_eval_records_workflow_failure_without_aborting_suite(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    scenario = get_default_scenarios()[0]
+
+    def fail_case(*args, **kwargs):
+        raise ReviewWorkflowFailed(
+            failed_node="result_generation",
+            reason="claim_grounding_validation_failed",
+            message="unsupported claim",
+            attempts=1,
+            trace_id="trace_failed",
+        )
+
+    monkeypatch.setattr(runner_module, "_run_single_case", fail_case)
+
+    result = _run_single_case_safely(
+        scenario,
+        tmp_path / "chunks.jsonl",
+        retrieval_mode="service",
+        review_mode="llm",
+        top_k=10,
+    )
+
+    assert result.is_bad_case is True
+    assert result.workflow_failed is True
+    assert result.failed_node == "result_generation"
+    assert result.failure_reason == "claim_grounding_validation_failed"
+    assert result.bad_case_categories == ["workflow_error"]
 
 
 def test_service_eval_mode_fails_fast_without_service_backend(tmp_path: Path) -> None:

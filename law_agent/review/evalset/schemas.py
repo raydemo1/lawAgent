@@ -14,6 +14,7 @@ BadCaseCategory = Literal[
     "candidate_missing",
     "abstention_error",
     "citation_gate_error",
+    "workflow_error",
 ]
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,9 @@ class CaseMetricResult(StrictModel):
     bad_reasons: list[str] = Field(default_factory=list)
     bad_case_categories: list[BadCaseCategory] = Field(default_factory=list)
     risk_level: str = ""
+    workflow_failed: bool = False
+    failed_node: str | None = None
+    failure_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
