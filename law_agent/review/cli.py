@@ -168,7 +168,11 @@ def _cmd_retrieve(args: argparse.Namespace) -> int:
 
 
 def _cmd_eval(args: argparse.Namespace) -> int:
-    from law_agent.review.evalset.runner import format_summary_text, run_evaluation
+    from law_agent.review.evalset.runner import (
+        format_summary_markdown,
+        format_summary_text,
+        run_evaluation,
+    )
 
     try:
         summary = run_evaluation(
@@ -179,6 +183,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             review_mode=args.review_mode,
             rerank_mode=args.rerank_mode,
             max_workers=args.max_workers,
+            eval_inputs_path=args.eval_inputs,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -196,6 +201,12 @@ def _cmd_eval(args: argparse.Namespace) -> int:
             summary.model_dump_json(indent=2), encoding="utf-8"
         )
         print(f"\nSaved JSON summary to {output_path}")
+
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(format_summary_markdown(summary), encoding="utf-8")
+        print(f"Saved Markdown report to {report_path}")
 
     return 0
 
@@ -394,6 +405,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Save JSON summary to this file path",
+    )
+    eval_parser.add_argument(
+        "--report",
+        default=None,
+        help="Save a Markdown evaluation report to this file path",
+    )
+    eval_parser.add_argument(
+        "--eval-inputs",
+        default=None,
+        help="Frozen facts/query JSONL shared by comparable LLM evaluation runs",
     )
     eval_parser.set_defaults(func=_cmd_eval)
 

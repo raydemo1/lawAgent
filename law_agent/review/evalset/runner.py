@@ -7,7 +7,9 @@ and produces a comparison summary.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -28,6 +30,7 @@ from law_agent.review.io import (
 from law_agent.review.query_planner import plan_queries
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH
 from law_agent.review.service import create_review_case, run_hybrid_retrieval
+from law_agent.review.schemas import ReviewFacts, RetrievalQuery
 
 RetrievalEvalMode = Literal["service", "local"]
 ReviewEvalMode = Literal["llm", "local"]
@@ -36,6 +39,15 @@ DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
 DEFAULT_RERANK_MODE: RerankMode = "off"
 DEFAULT_EVAL_SUITE: EvalSuite = "full"
 DEFAULT_MAX_WORKERS = 4
+DEFAULT_EVAL_INPUTS_DIR = Path("artifacts/review_runs/eval_inputs")
+
+
+@dataclass(frozen=True)
+class EvalCaseInput:
+    """Frozen LLM facts and queries reused by comparable evaluation runs."""
+
+    facts: ReviewFacts
+    queries: list[RetrievalQuery]
 
 
 def run_evaluation(
@@ -48,6 +60,7 @@ def run_evaluation(
     review_mode: ReviewEvalMode = DEFAULT_REVIEW_MODE,
     rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    eval_inputs_path: Path | str | None = None,
 ) -> EvalSummary:
     """Run full evaluation across selected modes.
 
@@ -62,6 +75,19 @@ def run_evaluation(
 
     eval_key = _eval_key(retrieval_mode, review_mode, rerank_mode)
     max_workers = max(1, max_workers)
+    eval_inputs: dict[str, EvalCaseInput] = {}
+    if review_mode == "llm":
+        resolved_inputs_path = _default_eval_inputs_path(
+            suite=suite,
+            cases_label=cases_label,
+            eval_inputs_path=eval_inputs_path,
+        )
+        if resolved_inputs_path is not None:
+            eval_inputs = _load_or_build_eval_inputs(
+                resolved_inputs_path,
+                scenarios,
+                max_workers=max_workers,
+            )
 
     # Serial service retrieval can reuse adapters. Parallel service retrieval
     # must not share the pgvector Postgres connection across threads, so each
@@ -92,6 +118,7 @@ def run_evaluation(
                         top_k=top_k,
                         service_adapters=service_adapters,
                         service_config=service_config,
+                        eval_input=eval_inputs.get(scenario.case_id),
                     ),
                     scenarios,
                 )
@@ -141,6 +168,92 @@ def _prewarm_service_eval_queries(service_adapters: object, scenarios: list[Eval
     prewarm(queries)
 
 
+def _default_eval_inputs_path(
+    *,
+    suite: EvalSuite,
+    cases_label: str,
+    eval_inputs_path: Path | str | None,
+) -> Path | None:
+    if eval_inputs_path is not None:
+        return Path(eval_inputs_path)
+    if cases_label == "custom":
+        return None
+    return DEFAULT_EVAL_INPUTS_DIR / f"{suite}_llm_inputs.jsonl"
+
+
+def _load_or_build_eval_inputs(
+    path: Path,
+    scenarios: list[EvalScenario],
+    *,
+    max_workers: int,
+) -> dict[str, EvalCaseInput]:
+    loaded = _read_eval_inputs(path) if path.exists() else {}
+    missing = [scenario for scenario in scenarios if scenario.case_id not in loaded]
+    if missing:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            built = list(executor.map(_build_eval_input, missing))
+        loaded.update(
+            (scenario.case_id, eval_input)
+            for scenario, eval_input in zip(missing, built, strict=True)
+        )
+        _write_eval_inputs(path, scenarios, loaded)
+    return loaded
+
+
+def _write_eval_inputs(
+    path: Path,
+    scenarios: list[EvalScenario],
+    inputs: dict[str, EvalCaseInput],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for scenario in scenarios:
+        eval_input = inputs[scenario.case_id]
+        lines.append(
+            json.dumps(
+                {
+                    "case_id": scenario.case_id,
+                    "facts": eval_input.facts.model_dump(),
+                    "queries": [query.model_dump() for query in eval_input.queries],
+                },
+                ensure_ascii=False,
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _read_eval_inputs(path: Path) -> dict[str, EvalCaseInput]:
+    inputs: dict[str, EvalCaseInput] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        inputs[payload["case_id"]] = EvalCaseInput(
+            facts=ReviewFacts.model_validate(payload["facts"], strict=True),
+            queries=[
+                RetrievalQuery.model_validate(query, strict=True)
+                for query in payload["queries"]
+            ],
+        )
+    return inputs
+
+
+def _build_eval_input(scenario: EvalScenario) -> EvalCaseInput:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        response = create_review_case(
+            question=scenario.question,
+            material_text=scenario.material_text,
+            output_dir=Path(tmpdir),
+            now=lambda: "2026-07-06T00:00:00+00:00",
+            id_factory=lambda prefix: f"{prefix}_eval",
+            review_mode="llm",
+        )
+    return EvalCaseInput(
+        facts=response.review_case.review_facts,
+        queries=response.trace.queries,
+    )
+
+
 def _run_single_case(
     scenario: EvalScenario,
     chunks_path: Path | str,
@@ -151,6 +264,7 @@ def _run_single_case(
     rerank_mode: RerankMode = DEFAULT_RERANK_MODE,
     service_adapters: object | None = None,
     service_config: object | None = None,
+    eval_input: EvalCaseInput | None = None,
 ) -> CaseMetricResult:
     """Run a single scenario in one mode and return metrics."""
 
@@ -158,13 +272,23 @@ def _run_single_case(
         tmp_path = Path(tmpdir)
         service_review_mode = "llm" if review_mode == "llm" else "rule_baseline"
 
+        facts_extractor = None
+        query_planner = None
+        create_review_mode = service_review_mode
+        if eval_input is not None:
+            create_review_mode = "rule_baseline"
+            facts_extractor = lambda _material, _question=None: eval_input.facts
+            query_planner = lambda _question, _facts, _material=None: eval_input.queries
+
         response = create_review_case(
             question=scenario.question,
             material_text=scenario.material_text,
             output_dir=tmp_path,
             now=lambda: "2026-07-06T00:00:00+00:00",
             id_factory=lambda prefix: f"{prefix}_eval",
-            review_mode=service_review_mode,
+            review_mode=create_review_mode,
+            facts_extractor=facts_extractor,
+            query_planner=query_planner,
         )
 
         case_id = "review_eval"
@@ -296,3 +420,68 @@ def format_summary_text(summary: EvalSummary) -> str:
 
     lines.append("\n" + "=" * 70)
     return "\n".join(lines)
+
+
+def format_summary_markdown(summary: EvalSummary) -> str:
+    """Format an evaluation result as a durable Markdown report."""
+
+    suite_title = summary.cases_path.title()
+    lines = [
+        f"# LawAgent {suite_title} Evaluation Report",
+        "",
+        f"- Generated: `{summary.generated_at}`",
+        f"- Corpus: `{summary.chunks_path}`",
+        f"- Cases: `{summary.cases_path}`",
+    ]
+    for mode_name, metrics in summary.mode_metrics.items():
+        lines.extend(
+            [
+                "",
+                f"## {mode_name}",
+                "",
+                "| Metric | Value |",
+                "|---|---:|",
+                f"| Total cases | {metrics.total_cases} |",
+                f"| Recall@3 | {metrics.mean_recall_at_3:.4f} |",
+                f"| Recall@5 | {metrics.mean_recall_at_5:.4f} |",
+                f"| MRR@10 | {metrics.mean_mrr_at_10:.4f} |",
+                f"| Candidate Recall@50 | {metrics.mean_candidate_recall_at_50:.4f} |",
+                f"| Abstention accuracy | {metrics.abstention_accuracy:.4f} |",
+                f"| Second retrieval trigger rate | {metrics.second_retrieval_trigger_rate:.4f} |",
+                f"| Citation violations | {metrics.total_citation_violations} |",
+                f"| Bad cases | {metrics.bad_case_count} |",
+                f"| Mean total latency (ms) | {_optional_number(metrics.mean_total_latency_ms)} |",
+                f"| Mean retrieval latency (ms) | {_optional_number(metrics.mean_retrieval_latency_ms)} |",
+                f"| Total LLM calls | {metrics.total_llm_calls} |",
+                f"| Total retries | {metrics.total_retries} |",
+            ]
+        )
+        if metrics.bad_case_taxonomy:
+            lines.extend(["", "### Bad-case taxonomy", ""])
+            for category, count in metrics.bad_case_taxonomy.items():
+                lines.append(f"- `{category}`: {count}")
+
+    lines.extend(["", "## Bad cases", ""])
+    if not summary.bad_cases:
+        lines.append("No bad cases.")
+    else:
+        lines.extend(["| Case | Categories | Reasons | Missing sources |", "|---|---|---|---|"])
+        for case in summary.bad_cases:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        case.case_id,
+                        ", ".join(case.bad_case_categories) or "-",
+                        "<br>".join(case.bad_reasons) or "-",
+                        "<br>".join(case.missing_sources) or "-",
+                    ]
+                )
+                + " |"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _optional_number(value: float | None) -> str:
+    return f"{value:.2f}" if value is not None else "-"

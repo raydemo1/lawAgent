@@ -13,7 +13,15 @@ from pathlib import Path
 from law_agent.data.io import write_jsonl
 from law_agent.review.evalset.cases import get_default_scenarios
 from law_agent.review.evalset.metrics import evaluate_case
-from law_agent.review.evalset.runner import _run_single_case, run_evaluation
+from law_agent.review.evalset.runner import (
+    EvalCaseInput,
+    _read_eval_inputs,
+    _run_single_case,
+    format_summary_markdown,
+    run_evaluation,
+)
+from law_agent.review.evalset.schemas import EvalSummary, ModeMetrics
+from law_agent.review.schemas import ReviewFacts, RetrievalQuery
 import law_agent.review.evalset.runner as runner_module
 
 from tests.test_review_retrieval_keyword import FIXTURE_CHUNKS
@@ -112,6 +120,7 @@ def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
         rerank_mode="off",
         service_adapters=None,
         service_config=None,
+        eval_input=None,
     ):
         captured.append(scenario.case_id)
         from law_agent.review.evalset.schemas import CaseMetricResult
@@ -138,6 +147,60 @@ def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
     assert summary.cases_path == "quick"
     assert len(captured) == 12
     assert summary.mode_metrics["retrieval=local,review=local"].total_cases == 12
+
+
+def test_eval_inputs_round_trip_for_fair_workflow_comparison(tmp_path: Path) -> None:
+    path = tmp_path / "full_llm_inputs.jsonl"
+    payload = (
+        '{"case_id":"case_1","facts":{"business_activity":"测试",'
+        '"data_types":[],"sensitive_personal_info":null,'
+        '"cross_border_transfer":true,"overseas_recipient":null,'
+        '"processing_purpose":null,"legal_basis_or_consent":null,'
+        '"industry":null,"region":null,"missing_information":[]},'
+        '"queries":[{"query_id":"q_1","query_type":"legal_issue",'
+        '"text":"数据出境"}]}\n'
+    )
+    path.write_text(payload, encoding="utf-8")
+
+    loaded = _read_eval_inputs(path)
+
+    assert loaded["case_1"] == EvalCaseInput(
+        facts=ReviewFacts(business_activity="测试", cross_border_transfer=True),
+        queries=[
+            RetrievalQuery(
+                query_id="q_1",
+                query_type="legal_issue",
+                text="数据出境",
+            )
+        ],
+    )
+
+
+def test_markdown_report_contains_core_metrics_and_bad_cases() -> None:
+    summary = EvalSummary(
+        generated_at="2026-07-11T00:00:00+00:00",
+        chunks_path="data/corpus/chunks.jsonl",
+        cases_path="full",
+        mode_metrics={
+            "retrieval=service,review=llm": ModeMetrics(
+                mode="retrieval=service,review=llm",
+                mean_recall_at_3=0.75,
+                mean_recall_at_5=0.85,
+                mean_mrr_at_10=0.9,
+                abstention_accuracy=1.0,
+                total_citation_violations=0,
+                bad_case_count=0,
+                total_cases=82,
+            )
+        },
+    )
+
+    report = format_summary_markdown(summary)
+
+    assert "# LawAgent Full Evaluation Report" in report
+    assert "| Recall@5 | 0.8500 |" in report
+    assert "| Citation violations | 0 |" in report
+    assert "No bad cases" in report
 
 
 def test_service_eval_mode_fails_fast_without_service_backend(tmp_path: Path) -> None:
