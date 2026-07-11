@@ -17,7 +17,9 @@ from law_agent.review.evidence import (
 from law_agent.review.agents import (
     build_evidence_dossiers,
     build_issue_plan,
+    run_case_analyst,
     run_evidence_critic,
+    select_issue_aware_hits,
     should_run_evidence_critic,
 )
 from law_agent.review.facts import (
@@ -68,6 +70,7 @@ from law_agent.review.schemas import (
     RetrievalHit,
     RetrievalQuery,
     RetrievalTrace,
+    IssuePlan,
 )
 from law_agent.review.telemetry import current_telemetry, reset_telemetry
 
@@ -78,6 +81,38 @@ DEFAULT_CANDIDATE_TOP_K = 50
 ReviewMode = Literal["rule_baseline", "llm", "multi_agent"]
 ResultFormat = Literal["plain", "markdown"]
 DEFAULT_SUPPORTING_CHUNKS_PER_SOURCE = 2
+
+
+def _build_issue_hit_pools(
+    *,
+    issue_plan: IssuePlan,
+    queries: list[RetrievalQuery],
+    keyword_hits_per_query: list[list[RetrievalHit]],
+    vector_hits_per_query: list[list[RetrievalHit]],
+    chunks_by_id: dict[str, object],
+    facts: ReviewFacts,
+    top_k: int,
+) -> dict[str, list[RetrievalHit]]:
+    """Fuse each issue's own queries before cross-issue evidence allocation."""
+
+    query_index = {query.query_id: index for index, query in enumerate(queries)}
+    pools: dict[str, list[RetrievalHit]] = {}
+    for issue in issue_plan.issues:
+        indexes = [query_index[qid] for qid in issue.query_ids if qid in query_index]
+        kw = merge_hits_by_chunk_id(
+            [keyword_hits_per_query[index] for index in indexes], top_k=top_k
+        )
+        vec = merge_hits_by_chunk_id(
+            [vector_hits_per_query[index] for index in indexes], top_k=top_k
+        )
+        boosted_kw = apply_boosts_to_hits(kw, chunks_by_id, facts)
+        boosted_vec = apply_boosts_to_hits(vec, chunks_by_id, facts)
+        pools[issue.issue_id] = source_aware_fuse(
+            rrf_fuse(boosted_kw, boosted_vec, top_k=top_k),
+            top_k=top_k,
+            chunks_by_id=chunks_by_id,
+        )
+    return pools
 
 
 def _validate_non_blank(value: str, field_name: str) -> str:
@@ -404,18 +439,35 @@ def run_hybrid_retrieval(
     total_started = time.perf_counter()
     case, target_trace, traces = _load_case_and_trace(case_id, output_dir)
     facts = case.review_facts
-    research_calls_before = current_telemetry().llm_call_count
+    initial_queries = list(target_trace.queries)
     multi_agent = review_mode == "multi_agent"
-    issue_plan = build_issue_plan(target_trace.queries) if multi_agent else None
     agent_steps: list[AgentStep] = []
-    if issue_plan is not None:
+    issue_plan = None
+    if multi_agent:
+        analyst_started = time.perf_counter()
+        analyst_calls_before = current_telemetry().llm_call_count
+        analysis = run_case_analyst(
+            question=case.question,
+            material_text=case.material.material_text,
+            facts=facts,
+            initial_queries=target_trace.queries,
+            trace_id=target_trace.trace_id,
+        )
+        issue_plan = analysis.issue_plan
+        target_trace = target_trace.model_copy(update={"queries": analysis.queries})
         agent_steps.append(
             AgentStep(
                 agent_name="case_analyst",
                 status="completed",
-                decision=f"planned {len(issue_plan.issues)} issues",
+                decision=(
+                    f"planned {len(issue_plan.issues)} issues and "
+                    f"{len(analysis.queries)} total queries"
+                ),
+                latency_ms=int((time.perf_counter() - analyst_started) * 1000),
+                llm_calls=current_telemetry().llm_call_count - analyst_calls_before,
             )
         )
+    research_calls_before = current_telemetry().llm_call_count
 
     chunks = load_corpus(chunks_path)
     chunks_by_id: dict[str, object] = {c.chunk_id: c for c in chunks}
@@ -449,12 +501,27 @@ def run_hybrid_retrieval(
         retrieval_queries, top_k=candidate_top_k
     )
 
-    merged_keyword = merge_hits_by_chunk_id(keyword_hits_per_query, top_k=candidate_top_k)
-    merged_vector = merge_hits_by_chunk_id(vector_hits_per_query, top_k=candidate_top_k)
+    merged_keyword_all = merge_hits_by_chunk_id(
+        keyword_hits_per_query, top_k=candidate_top_k
+    )
+    merged_vector_all = merge_hits_by_chunk_id(
+        vector_hits_per_query, top_k=candidate_top_k
+    )
+    initial_query_count = len(initial_queries)
+    merged_keyword = merge_hits_by_chunk_id(
+        keyword_hits_per_query[:initial_query_count], top_k=candidate_top_k
+    )
+    merged_vector = merge_hits_by_chunk_id(
+        vector_hits_per_query[:initial_query_count], top_k=candidate_top_k
+    )
 
     # Apply metadata boosts to both component results
     boosted_keyword = apply_boosts_to_hits(merged_keyword, chunks_by_id, facts)
     boosted_vector = apply_boosts_to_hits(merged_vector, chunks_by_id, facts)
+    boosted_keyword_all = apply_boosts_to_hits(
+        merged_keyword_all, chunks_by_id, facts
+    )
+    boosted_vector_all = apply_boosts_to_hits(merged_vector_all, chunks_by_id, facts)
 
     # RRF produces a broad chunk-level candidate list; source-aware fusion
     # then collapses repeated chunks from the same legal source into a
@@ -467,6 +534,26 @@ def run_hybrid_retrieval(
         top_k=source_fusion_top_k,
         chunks_by_id=chunks_by_id,
     )
+    issue_hits_by_issue = (
+        _build_issue_hit_pools(
+            issue_plan=issue_plan,
+            queries=target_trace.queries,
+            keyword_hits_per_query=keyword_hits_per_query,
+            vector_hits_per_query=vector_hits_per_query,
+            chunks_by_id=chunks_by_id,
+            facts=facts,
+            top_k=candidate_top_k,
+        )
+        if issue_plan is not None
+        else {}
+    )
+    if issue_plan is not None:
+        hybrid_hits = select_issue_aware_hits(
+            issue_plan,
+            issue_hits_by_issue,
+            hybrid_hits,
+            top_k=source_fusion_top_k,
+        )
     rerank_outcome = rerank_hits(
         hybrid_hits,
         question=case.question,
@@ -509,6 +596,8 @@ def run_hybrid_retrieval(
         candidate_hits=hybrid_candidates,
         neighbor_hits=neighbor_hits,
     )
+    active_candidates = hybrid_candidates
+    active_neighbor_hits = neighbor_hits
 
     if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
         plan = self_check.second_retrieval_plan
@@ -532,12 +621,29 @@ def run_hybrid_retrieval(
             all_queries, top_k=expanded_candidate_top_k
         )
 
-        merged_kw2 = merge_hits_by_chunk_id(kw2_per_query, top_k=expanded_candidate_top_k)
-        merged_vec2 = merge_hits_by_chunk_id(vec2_per_query, top_k=expanded_candidate_top_k)
+        global_indexes = list(range(len(initial_queries))) + list(
+            range(len(target_trace.queries), len(all_queries))
+        )
+        merged_kw2_all = merge_hits_by_chunk_id(
+            kw2_per_query, top_k=expanded_candidate_top_k
+        )
+        merged_vec2_all = merge_hits_by_chunk_id(
+            vec2_per_query, top_k=expanded_candidate_top_k
+        )
+        merged_kw2 = merge_hits_by_chunk_id(
+            [kw2_per_query[index] for index in global_indexes],
+            top_k=expanded_candidate_top_k,
+        )
+        merged_vec2 = merge_hits_by_chunk_id(
+            [vec2_per_query[index] for index in global_indexes],
+            top_k=expanded_candidate_top_k,
+        )
 
         # Apply stronger boosts on second retrieval
         boosted_kw2 = apply_boosts_to_hits(merged_kw2, chunks_by_id, facts)
         boosted_vec2 = apply_boosts_to_hits(merged_vec2, chunks_by_id, facts)
+        boosted_kw2_all = apply_boosts_to_hits(merged_kw2_all, chunks_by_id, facts)
+        boosted_vec2_all = apply_boosts_to_hits(merged_vec2_all, chunks_by_id, facts)
 
         hybrid2_candidates = rrf_fuse(
             boosted_kw2,
@@ -549,6 +655,22 @@ def run_hybrid_retrieval(
             top_k=expanded_source_fusion_top_k,
             chunks_by_id=chunks_by_id,
         )
+        if issue_plan is not None:
+            issue_hits_by_issue = _build_issue_hit_pools(
+                issue_plan=issue_plan,
+                queries=list(target_trace.queries) + plan.expanded_queries,
+                keyword_hits_per_query=kw2_per_query,
+                vector_hits_per_query=vec2_per_query,
+                chunks_by_id=chunks_by_id,
+                facts=facts,
+                top_k=expanded_candidate_top_k,
+            )
+            hybrid2_hits = select_issue_aware_hits(
+                issue_plan,
+                issue_hits_by_issue,
+                hybrid2_hits,
+                top_k=expanded_source_fusion_top_k,
+            )
         rerank2_outcome = rerank_hits(
             hybrid2_hits,
             question=case.question,
@@ -581,6 +703,8 @@ def run_hybrid_retrieval(
             candidate_hits=hybrid2_candidates,
             neighbor_hits=neighbor2_hits,
         )
+        active_candidates = hybrid2_candidates
+        active_neighbor_hits = neighbor2_hits
         second_retrieval_info = {
             "triggered": True,
             "expanded_queries": [q.model_dump() for q in plan.expanded_queries],
@@ -594,8 +718,8 @@ def run_hybrid_retrieval(
         # Update trace with second retrieval results
         updated_trace = target_trace.model_copy(
             update={
-                "keyword_results": boosted_kw2,
-                "vector_results": boosted_vec2,
+                "keyword_results": boosted_kw2_all,
+                "vector_results": boosted_vec2_all,
                 "hybrid_results": hybrid2_hits,
                 "neighbor_chunks": neighbor2_hits,
                 "metadata_boosts": boosts_summary,
@@ -609,8 +733,8 @@ def run_hybrid_retrieval(
     else:
         updated_trace = target_trace.model_copy(
             update={
-                "keyword_results": boosted_keyword,
-                "vector_results": boosted_vector,
+                "keyword_results": boosted_keyword_all,
+                "vector_results": boosted_vector_all,
                 "hybrid_results": hybrid_hits,
                 "neighbor_chunks": neighbor_hits,
                 "metadata_boosts": boosts_summary,
@@ -627,7 +751,11 @@ def run_hybrid_retrieval(
     # Issue 8: Build governed review result
     result_evidence = flatten_source_evidence_packets(source_evidence_packets)
     evidence_dossiers = (
-        build_evidence_dossiers(issue_plan, result_evidence)
+        build_evidence_dossiers(
+            issue_plan,
+            result_evidence,
+            issue_hits_by_issue=issue_hits_by_issue,
+        )
         if issue_plan is not None
         else []
     )
@@ -700,6 +828,105 @@ def run_hybrid_retrieval(
                     llm_calls=current_telemetry().llm_call_count - critic_calls_before,
                 )
             )
+            targeted_requests = critique_decision.targeted_retrieval_requests
+            if targeted_requests:
+                targeted_started = time.perf_counter()
+                next_query_number = len(updated_trace.queries) + 1
+                targeted_queries = [
+                    RetrievalQuery(
+                        query_id=f"q_{next_query_number + index}",
+                        query_type=request.query_type,
+                        text=request.query.strip(),
+                    )
+                    for index, request in enumerate(targeted_requests)
+                    if request.query.strip()
+                ]
+                targeted_pairs = [
+                    (query.text, query.query_type) for query in targeted_queries
+                ]
+                targeted_kw = keyword_retriever.search_many(
+                    targeted_pairs, top_k=candidate_top_k
+                )
+                targeted_vec = vector_retriever.search_many(
+                    targeted_pairs, top_k=candidate_top_k
+                )
+                merged_targeted_kw = apply_boosts_to_hits(
+                    merge_hits_by_chunk_id(targeted_kw, top_k=candidate_top_k),
+                    chunks_by_id,
+                    facts,
+                )
+                merged_targeted_vec = apply_boosts_to_hits(
+                    merge_hits_by_chunk_id(targeted_vec, top_k=candidate_top_k),
+                    chunks_by_id,
+                    facts,
+                )
+                targeted_candidates = rrf_fuse(
+                    merged_targeted_kw,
+                    merged_targeted_vec,
+                    top_k=candidate_top_k,
+                )
+                for index, request in enumerate(targeted_requests[: len(targeted_queries)]):
+                    issue_candidates = rrf_fuse(
+                        apply_boosts_to_hits(targeted_kw[index], chunks_by_id, facts),
+                        apply_boosts_to_hits(targeted_vec[index], chunks_by_id, facts),
+                        top_k=candidate_top_k,
+                    )
+                    combined_issue = issue_hits_by_issue.get(request.issue_id, []) + issue_candidates
+                    issue_hits_by_issue[request.issue_id] = source_aware_fuse(
+                        combined_issue,
+                        top_k=candidate_top_k,
+                        chunks_by_id=chunks_by_id,
+                    )
+
+                final_evidence = select_issue_aware_hits(
+                    issue_plan,
+                    issue_hits_by_issue,
+                    final_evidence,
+                    top_k=max(top_k, len(final_evidence)),
+                )
+                targeted_neighbors = expand_neighbors(
+                    final_evidence[:5], chunks_by_id, max_neighbors=max_neighbors
+                )
+                active_candidates = list(active_candidates) + targeted_candidates
+                active_neighbor_hits = list(active_neighbor_hits) + targeted_neighbors
+                source_evidence_packets = build_source_evidence_packets(
+                    representative_hits=final_evidence,
+                    candidate_hits=active_candidates,
+                    neighbor_hits=active_neighbor_hits,
+                )
+                result_evidence = flatten_source_evidence_packets(source_evidence_packets)
+                evidence_dossiers = build_evidence_dossiers(
+                    issue_plan,
+                    result_evidence,
+                    issue_hits_by_issue=issue_hits_by_issue,
+                )
+                targeted_info = {
+                    "triggered": True,
+                    "requests": [request.model_dump() for request in targeted_requests],
+                    "queries": [query.model_dump() for query in targeted_queries],
+                    "result_count": len(final_evidence),
+                }
+                updated_trace = updated_trace.model_copy(
+                    update={
+                        "queries": list(updated_trace.queries) + targeted_queries,
+                        "hybrid_results": final_evidence,
+                        "neighbor_chunks": targeted_neighbors,
+                        "final_evidence": final_evidence,
+                        "source_evidence_packets": source_evidence_packets,
+                        "second_retrieval": {
+                            **updated_trace.second_retrieval,
+                            "critic_targeted_retrieval": targeted_info,
+                        },
+                    }
+                )
+                agent_steps.append(
+                    AgentStep(
+                        agent_name="targeted_researcher",
+                        status="completed",
+                        decision=f"ran {len(targeted_queries)} targeted queries",
+                        latency_ms=int((time.perf_counter() - targeted_started) * 1000),
+                    )
+                )
             if critique_decision.decision == "revise":
                 revision_started = time.perf_counter()
                 revision_calls_before = current_telemetry().llm_call_count

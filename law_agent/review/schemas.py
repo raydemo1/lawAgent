@@ -187,6 +187,8 @@ class ReviewIssue(StrictModel):
     question: str
     query_ids: list[str] = Field(default_factory=list)
     query_types: list[RetrievalQueryType] = Field(default_factory=list)
+    research_queries: list[str] = Field(default_factory=list, max_length=3)
+    required_evidence_roles: list[ClauseCitationRole] = Field(default_factory=list)
     priority: Literal["high", "medium", "low"] = "medium"
 
 
@@ -205,6 +207,29 @@ class EvidenceDossier(StrictModel):
     evidence_gap: bool = False
 
 
+class CaseAnalysis(StrictModel):
+    """Case-analyst output with issue-specific queries ready for retrieval."""
+
+    issue_plan: IssuePlan
+    queries: list[RetrievalQuery] = Field(default_factory=list)
+
+
+class TargetedRetrievalRequest(StrictModel):
+    """One bounded evidence gap that the critic asks researchers to refill."""
+
+    issue_id: str
+    query: str
+    query_type: RetrievalQueryType = "legal_issue"
+    reason: str
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("targeted retrieval query must not be blank")
+        return value.strip()
+
+
 class CritiqueDecision(StrictModel):
     """Evidence critic decision; at most one revision is allowed."""
 
@@ -212,12 +237,17 @@ class CritiqueDecision(StrictModel):
     unsupported_claims: list[str] = Field(default_factory=list)
     missing_issue_ids: list[str] = Field(default_factory=list)
     revision_instructions: list[str] = Field(default_factory=list)
+    targeted_retrieval_requests: list[TargetedRetrievalRequest] = Field(
+        default_factory=list, max_length=3
+    )
     reason: str
 
     @model_validator(mode="after")
     def revision_requires_instructions(self) -> "CritiqueDecision":
         if self.decision == "revise" and not self.revision_instructions:
             raise ValueError("revise decision requires revision_instructions")
+        if self.decision == "approve" and self.targeted_retrieval_requests:
+            raise ValueError("approve decision cannot request targeted retrieval")
         return self
 
 
@@ -229,6 +259,7 @@ class AgentStep(StrictModel):
         "evidence_researcher",
         "compliance_reviewer",
         "evidence_critic",
+        "targeted_researcher",
         "compliance_revision",
     ]
     status: Literal["completed", "skipped", "failed"]

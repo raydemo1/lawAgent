@@ -323,6 +323,9 @@ def aggregate_metrics(
     workflow_successes = sum(1 for c in case_results if not c.workflow_failed)
     critic_triggers = sum(1 for c in case_results if c.critic_triggered)
     critic_revisions = sum(1 for c in case_results if c.critic_revised)
+    targeted_retrievals = sum(
+        1 for c in case_results if c.targeted_retrieval_triggered
+    )
 
     total_violations = sum(c.citation_violation_count for c in case_results)
     bad_count = sum(1 for c in case_results if c.is_bad_case)
@@ -357,6 +360,7 @@ def aggregate_metrics(
         workflow_success_rate=round(workflow_successes / total, 4),
         critic_trigger_rate=round(critic_triggers / total, 4),
         critic_revision_rate=round(critic_revisions / total, 4),
+        targeted_retrieval_trigger_rate=round(targeted_retrievals / total, 4),
         total_citation_violations=total_violations,
         bad_case_count=bad_count,
         bad_case_taxonomy=dict(sorted(taxonomy.items())),

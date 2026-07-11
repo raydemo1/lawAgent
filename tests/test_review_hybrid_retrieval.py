@@ -701,9 +701,13 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from law_agent.review.schemas import (
+        CaseAnalysis,
         CritiqueDecision,
         EvidenceSelfCheck,
+        IssuePlan,
+        ReviewIssue,
         ReviewResult,
+        RetrievalQuery,
     )
     from law_agent.review.service import create_review_case, run_hybrid_retrieval
 
@@ -724,6 +728,30 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
     monkeypatch.setattr(
         "law_agent.review.service.validate_llm_self_check",
         lambda check, *args, **kwargs: check,
+    )
+    analyst_query = RetrievalQuery(
+        query_id="q_analyst",
+        query_type="legal_issue",
+        text="数据出境安全评估 申报门槛 条文",
+    )
+    monkeypatch.setattr(
+        "law_agent.review.service.run_case_analyst",
+        lambda **kwargs: CaseAnalysis(
+            issue_plan=IssuePlan(
+                issues=[
+                    ReviewIssue(
+                        issue_id="issue_1",
+                        question="是否达到申报门槛？",
+                        query_ids=[analyst_query.query_id],
+                        query_types=["legal_issue"],
+                        research_queries=[analyst_query.text],
+                        required_evidence_roles=["primary_legal_basis"],
+                        priority="high",
+                    )
+                ]
+            ),
+            queries=list(kwargs["initial_queries"]) + [analyst_query],
+        ),
     )
 
     def fake_build_result(**kwargs):
@@ -748,6 +776,14 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
             unsupported_claims=["结论过宽"],
             missing_issue_ids=[],
             revision_instructions=["收窄结论"],
+            targeted_retrieval_requests=[
+                {
+                    "issue_id": "issue_1",
+                    "query": "个人信息保护法 第三十九条 境外提供",
+                    "query_type": "legal_issue",
+                    "reason": "补充直接法条",
+                }
+            ],
             reason="证据只支持条件性判断",
         ),
     )
@@ -767,11 +803,17 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
         step for step in trace.agent_steps if step.agent_name == "evidence_researcher"
     )
     assert researcher_step.llm_calls == 0
+    assert any(query.text == analyst_query.text for query in trace.queries)
+    assert any(
+        query.text == "个人信息保护法 第三十九条 境外提供"
+        for query in trace.queries
+    )
     assert [step.agent_name for step in trace.agent_steps] == [
         "case_analyst",
         "evidence_researcher",
         "compliance_reviewer",
         "evidence_critic",
+        "targeted_researcher",
         "compliance_revision",
     ]
 

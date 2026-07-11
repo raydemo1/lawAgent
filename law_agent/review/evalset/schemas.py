@@ -83,6 +83,7 @@ class CaseMetricResult(StrictModel):
     issue_count: int = 0
     critic_triggered: bool = False
     critic_revised: bool = False
+    targeted_retrieval_triggered: bool = False
     critic_reason: str | None = None
     agent_steps: list[AgentStep] = Field(default_factory=list)
 
@@ -111,6 +112,7 @@ class ModeMetrics(StrictModel):
     workflow_success_rate: float = 1.0
     critic_trigger_rate: float = 0.0
     critic_revision_rate: float = 0.0
+    targeted_retrieval_trigger_rate: float = 0.0
     total_citation_violations: int
     bad_case_count: int
     bad_case_taxonomy: dict[str, int] = Field(default_factory=dict)

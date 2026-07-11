@@ -8,6 +8,7 @@ from law_agent.config import require_llm_config
 from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
 from law_agent.review.llm import StructuredLLMNode
 from law_agent.review.schemas import (
+    CaseAnalysis,
     CritiqueDecision,
     EvidenceDossier,
     EvidenceSelfCheck,
@@ -50,19 +51,136 @@ def build_issue_plan(queries: list[RetrievalQuery]) -> IssuePlan:
     return IssuePlan(issues=issues)
 
 
+def build_case_analyst_messages(
+    *,
+    question: str,
+    material_text: str,
+    facts: object,
+    initial_queries: list[RetrievalQuery],
+) -> list[ChatMessage]:
+    payload = {
+        "question": question,
+        "material_text": material_text,
+        "facts": facts.model_dump(),
+        "initial_queries": [query.model_dump() for query in initial_queries],
+    }
+    example = {
+        "issues": [
+            {
+                "issue_id": "issue_1",
+                "question": "是否达到数据出境安全评估申报条件？",
+                "query_ids": [],
+                "query_types": ["legal_issue"],
+                "research_queries": ["数据出境安全评估 申报条件 条文"],
+                "required_evidence_roles": ["primary_legal_basis"],
+                "priority": "high",
+            }
+        ]
+    }
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是企业数据合规审查的 Case Analyst。把材料拆成最多四个相互独立、"
+                "可由法律证据回答的问题。每个问题生成一到三个短而具体的检索词，优先使用"
+                "明确制度名、义务、门槛、地区或行业锚点；禁止只复述材料或生成宽泛问题。"
+                "不要给出法律结论。query_ids 留空，由系统分配。"
+            ),
+        ),
+        ChatMessage(
+            role="user",
+            content=(
+                "输出严格 JSON，issues 至少一项。query_types、required_evidence_roles 必须使用"
+                "示例所示受控枚举。"
+                f"\njson_example={json.dumps(example, ensure_ascii=False)}"
+                f"\npayload={json.dumps(payload, ensure_ascii=False)}"
+            ),
+        ),
+    ]
+
+
+def run_case_analyst(
+    *,
+    question: str,
+    material_text: str,
+    facts: object,
+    initial_queries: list[RetrievalQuery],
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+    trace_id: str | None = None,
+) -> CaseAnalysis:
+    """Generate issue-specific research queries while preserving frozen inputs."""
+
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+    node = StructuredLLMNode(
+        node_name="case_analyst",
+        output_model=IssuePlan,
+        client=client,
+        max_retries=max_retries,
+        trace_id=trace_id,
+    )
+    draft = node.run(
+        build_case_analyst_messages(
+            question=question,
+            material_text=material_text,
+            facts=facts,
+            initial_queries=initial_queries,
+        )
+    )
+
+    combined = list(initial_queries)
+    seen_text = {query.text.strip().casefold() for query in initial_queries}
+    next_id = len(initial_queries) + 1
+    normalized_issues: list[ReviewIssue] = []
+    for index, issue in enumerate(draft.issues[:4], start=1):
+        assigned: list[str] = []
+        query_type = issue.query_types[0] if issue.query_types else "legal_issue"
+        for text in issue.research_queries[:3]:
+            normalized = text.strip()
+            if not normalized or normalized.casefold() in seen_text:
+                continue
+            query = RetrievalQuery(
+                query_id=f"q_{next_id}", query_type=query_type, text=normalized
+            )
+            next_id += 1
+            combined.append(query)
+            assigned.append(query.query_id)
+            seen_text.add(normalized.casefold())
+        if not assigned:
+            matching = [q.query_id for q in initial_queries if q.query_type in issue.query_types]
+            assigned = matching[:3]
+        normalized_issues.append(
+            issue.model_copy(
+                update={"issue_id": f"issue_{index}", "query_ids": assigned}
+            )
+        )
+
+    if not normalized_issues:
+        fallback = build_issue_plan(initial_queries)
+        return CaseAnalysis(issue_plan=fallback, queries=combined)
+    return CaseAnalysis(issue_plan=IssuePlan(issues=normalized_issues), queries=combined)
+
+
 def build_evidence_dossiers(
     issue_plan: IssuePlan,
     evidence_hits: list[RetrievalHit],
+    *,
+    issue_hits_by_issue: dict[str, list[RetrievalHit]] | None = None,
 ) -> list[EvidenceDossier]:
     """Assign retrieved evidence to issues using recorded query types."""
 
     dossiers: list[EvidenceDossier] = []
     for issue in issue_plan.issues:
-        matched = [
-            hit
-            for hit in evidence_hits
-            if hit.matched_query_type in set(issue.query_types)
-        ]
+        matched = (
+            issue_hits_by_issue.get(issue.issue_id, [])
+            if issue_hits_by_issue is not None
+            else [
+                hit
+                for hit in evidence_hits
+                if hit.matched_query_type in set(issue.query_types)
+            ]
+        )
         chunk_ids = list(dict.fromkeys(hit.chunk_id for hit in matched))
         source_ids = list(dict.fromkeys(hit.source_id for hit in matched))
         dossiers.append(
@@ -76,6 +194,57 @@ def build_evidence_dossiers(
     return dossiers
 
 
+def select_issue_aware_hits(
+    issue_plan: IssuePlan,
+    issue_hits_by_issue: dict[str, list[RetrievalHit]],
+    global_hits: list[RetrievalHit],
+    *,
+    top_k: int,
+) -> list[RetrievalHit]:
+    """Reserve evidence capacity per issue, then fill globally with source diversity."""
+
+    if top_k <= 0:
+        return []
+    priority = {"high": 0, "medium": 1, "low": 2}
+    issues = sorted(issue_plan.issues, key=lambda issue: priority[issue.priority])
+    selected: list[RetrievalHit] = []
+    chunk_ids: set[str] = set()
+    source_ids: set[str] = set()
+
+    def add_best(candidates: list[RetrievalHit]) -> bool:
+        ordered = sorted(candidates, key=lambda hit: (-hit.score, hit.rank, hit.chunk_id))
+        for prefer_new_source in (True, False):
+            for hit in ordered:
+                if hit.chunk_id in chunk_ids:
+                    continue
+                if prefer_new_source and hit.source_id in source_ids:
+                    continue
+                selected.append(hit)
+                chunk_ids.add(hit.chunk_id)
+                source_ids.add(hit.source_id)
+                return True
+        return False
+
+    # Preserve three strong baseline anchors before issue allocation. This keeps
+    # issue-specific queries from displacing already-good general retrieval.
+    for hit in global_hits[: min(3, top_k)]:
+        add_best([hit])
+
+    # Each issue can then contribute one source when capacity allows.
+    for issue in issues:
+        if len(selected) >= top_k:
+            break
+        add_best(issue_hits_by_issue.get(issue.issue_id, []))
+
+    while len(selected) < top_k and add_best(global_hits):
+        pass
+
+    return [
+        hit.model_copy(update={"rank": rank, "retriever": "hybrid"})
+        for rank, hit in enumerate(selected, start=1)
+    ]
+
+
 def should_run_evidence_critic(
     result: ReviewResult,
     self_check: EvidenceSelfCheck,
@@ -87,7 +256,6 @@ def should_run_evidence_critic(
         result.risk_level == "high"
         or self_check.second_retrieval_triggered
         or self_check.status == "insufficient"
-        or len(issue_plan.issues) >= 4
     )
 
 
@@ -124,6 +292,7 @@ def build_critic_messages(
         "unsupported_claims": [],
         "missing_issue_ids": [],
         "revision_instructions": [],
+        "targeted_retrieval_requests": [],
         "reason": "所有高优先级问题均有证据支持",
     }
     return [
@@ -131,15 +300,16 @@ def build_critic_messages(
             role="system",
             content=(
                 "你是企业数据合规审查的 Evidence Critic。只检查结论是否超出证据、"
-                "高优先级 issue 是否遗漏、风险等级是否与证据冲突。不要重新检索，"
-                "不要要求文风修改。只有实质性证据问题才输出 revise。"
+                "高优先级 issue 是否遗漏、风险等级是否与证据冲突。若缺少可补齐的关键证据，"
+                "可给出最多三个 targeted_retrieval_requests；不要要求文风修改。"
             ),
         ),
         ChatMessage(
             role="user",
             content=(
                 "请输出严格 JSON。revision_instructions 必须具体且最多三条；"
-                "approve 时该数组必须为空。"
+                "approve 时 revision_instructions 和 targeted_retrieval_requests 必须为空；"
+                "定向查询必须短、具体并指向缺失的法律依据。"
                 f"\njson_example={json.dumps(example, ensure_ascii=False)}"
                 f"\npayload={json.dumps(payload, ensure_ascii=False)}"
             ),
@@ -165,11 +335,25 @@ def run_evidence_critic(
         max_retries=max_retries,
         trace_id=result.trace_id,
     )
+    valid_issue_ids = {issue.issue_id for issue in issue_plan.issues}
+
+    def validate_requests(decision: CritiqueDecision) -> CritiqueDecision:
+        invalid = [
+            request.issue_id
+            for request in decision.targeted_retrieval_requests
+            if request.issue_id not in valid_issue_ids
+        ]
+        if invalid:
+            raise ValueError(f"unknown targeted retrieval issue_ids: {invalid}")
+        return decision
+
     return node.run(
         build_critic_messages(
             result=result,
             issue_plan=issue_plan,
             dossiers=dossiers,
             evidence_hits=evidence_hits,
-        )
+        ),
+        post_validate=validate_requests,
+        post_validation_reason="critic_request_validation_failed",
     )

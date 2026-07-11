@@ -354,6 +354,10 @@ def _run_single_case(
                     trace.critique_decision is not None
                     and trace.critique_decision.decision == "revise"
                 ),
+                "targeted_retrieval_triggered": any(
+                    step.agent_name == "targeted_researcher"
+                    for step in trace.agent_steps
+                ),
                 "critic_reason": (
                     trace.critique_decision.reason if trace.critique_decision else None
                 ),
@@ -435,6 +439,10 @@ def format_summary_text(summary: EvalSummary) -> str:
         if metrics.critic_trigger_rate:
             lines.append(f"  Critic trigger rate: {metrics.critic_trigger_rate:.4f}")
             lines.append(f"  Critic revision rate: {metrics.critic_revision_rate:.4f}")
+            lines.append(
+                "  Targeted retrieval rate: "
+                f"{metrics.targeted_retrieval_trigger_rate:.4f}"
+            )
         lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
         if metrics.bad_case_taxonomy:
@@ -508,6 +516,7 @@ def format_summary_markdown(
                 f"| Workflow success rate | {metrics.workflow_success_rate:.4f} |",
                 f"| Critic trigger rate | {metrics.critic_trigger_rate:.4f} |",
                 f"| Critic revision rate | {metrics.critic_revision_rate:.4f} |",
+                f"| Targeted retrieval trigger rate | {metrics.targeted_retrieval_trigger_rate:.4f} |",
             ]
         )
         if metrics.bad_case_taxonomy:
