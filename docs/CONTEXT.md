@@ -53,8 +53,8 @@ _Avoid_: 只展示最终 chunk, 不可解释清洗
 _Avoid_: 无限 Agent 对话, 角色扮演式协作, 黑盒工具调用, 无终止条件的反思循环
 
 **LLM-owned Review Workflow**:
-材料驱动合规审查的 LLM 主导形态。审查事实抽取、query planning、证据自检、结构化审查结果和条件式 Evidence Critic 由 LLM 节点负责；程序负责 schema 校验、引用门禁、trace、检索后端调用、Critic 触发条件、单次修订上限和错误上抛。当前实现先只接入 DeepSeek，不引入多 provider 能力字段；每个 LLM 节点 prompt 必须给出目标 JSON 示例，LLM 输出按 JSON prompt 约束后直接走 Pydantic 严格校验和节点级 retry。LLM 节点可以按配置重试，但重试耗尽后必须显式失败，不用规则路径静默兜底。不要再拆出独立 risk classifier、missing info detector 或 recommendation generator。
-_Avoid_: 规则隐性 fallback, 模型失败后继续产出伪结果, 把规则判断混进线上 LLM 模式
+材料驱动合规审查的 LLM 主导形态。审查事实抽取、query planning、结构化审查结果和条件式 Evidence Critic 由 LLM 节点负责；证据自检先判断可验证的确定性条件，只有库外范围或事实过少等语义歧义才调用 LLM。程序负责 schema 校验、引用门禁、trace、检索后端调用、Critic 触发条件、单次修订上限和错误暴露。当前实现先只接入 DeepSeek，不引入多 provider 能力字段；每个 LLM 节点 prompt 必须给出目标 JSON 示例，LLM 输出按 JSON prompt 约束后直接走 Pydantic 严格校验和节点级 retry。初始 Reviewer 或可选 Revision 失败时，Multi-Agent 可以保留程序生成或原先已经验证的可用结果，但必须标记为 degraded success；无法产生可信结果时才是 hard failure。不要再拆出独立 risk classifier、missing info detector 或 recommendation generator。
+_Avoid_: 不可观察的规则 fallback, 模型失败后伪装成 clean success, 把规则判断混进模型输出
 
 **二次召回**:
 LawAgent 第一版必须突出的 Agentic RAG 能力，指系统在首次检索后判断证据不足时，受控地改写查询、扩大召回或切换检索策略，再执行一次补充检索。

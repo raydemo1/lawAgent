@@ -369,6 +369,10 @@ class RetrievalTrace(StrictModel):
     keyword_results: list[RetrievalHit] = Field(default_factory=list)
     vector_results: list[RetrievalHit] = Field(default_factory=list)
     hybrid_results: list[RetrievalHit] = Field(default_factory=list)
+    candidate_results: list[RetrievalHit] = Field(
+        default_factory=list,
+        description="Unique fused chunk candidates before final source allocation.",
+    )
     neighbor_chunks: list[RetrievalHit] = Field(default_factory=list)
     rerank: dict[str, object] = Field(default_factory=dict)
     second_retrieval: dict[str, object] = Field(default_factory=dict)

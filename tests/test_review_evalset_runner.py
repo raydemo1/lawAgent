@@ -78,15 +78,15 @@ def test_keyword_mode_produces_real_risk_level(tmp_path: Path) -> None:
     assert "abstention_incorrect" not in result.bad_reasons
 
 
-def test_runner_passes_final_citation_groups_to_metrics(tmp_path: Path, monkeypatch) -> None:
-    """Eval runner must count citation violations from final citations."""
+def test_runner_passes_fused_candidates_to_metrics(tmp_path: Path, monkeypatch) -> None:
+    """Eval runner must evaluate the persisted fused candidate pool."""
 
     chunks_path = _write_fixture_corpus(tmp_path)
     scenario = [s for s in get_default_scenarios() if not s.should_abstain][0]
     captured = []
 
     def spy_evaluate_case(*args, **kwargs):
-        captured.append(kwargs.get("citation_groups"))
+        captured.append(kwargs.get("candidate_hits"))
         return evaluate_case(*args, **kwargs)
 
     monkeypatch.setattr(runner_module, "evaluate_case", spy_evaluate_case)
@@ -132,7 +132,6 @@ def test_run_evaluation_uses_named_suite_when_scenarios_omitted(
             recall_at_3=1.0,
             recall_at_5=1.0,
             mrr_at_10=1.0,
-            citation_violation_count=0,
             abstention_correct=True,
             second_retrieval_triggered=False,
         )
@@ -190,7 +189,6 @@ def test_markdown_report_contains_core_metrics_and_bad_cases() -> None:
                 mean_recall_at_5=0.85,
                 mean_mrr_at_10=0.9,
                 abstention_accuracy=1.0,
-                total_citation_violations=0,
                 bad_case_count=0,
                 total_cases=82,
             )
@@ -201,7 +199,7 @@ def test_markdown_report_contains_core_metrics_and_bad_cases() -> None:
 
     assert "# LawAgent Full Evaluation Report" in report
     assert "| Recall@5 | 0.8500 |" in report
-    assert "| Citation violations | 0 |" in report
+    assert "Citation violations" not in report
     assert "No bad cases" in report
 
 

@@ -14,9 +14,9 @@ BadCaseCategory = Literal[
     "retrieval_low_recall",
     "candidate_missing",
     "abstention_error",
-    "citation_gate_error",
     "workflow_error",
 ]
+WorkflowOutcome = Literal["clean_success", "degraded_success", "hard_failure"]
 
 # ---------------------------------------------------------------------------
 # Golden set case schema
@@ -56,13 +56,13 @@ class CaseMetricResult(StrictModel):
     """Metrics for a single scenario case."""
 
     case_id: str
-    recall_at_3: float
-    recall_at_5: float
-    mrr_at_10: float
-    candidate_recall_at_50: float = 0.0
-    distinct_source_recall_at_5: float = 0.0
+    recall_at_3: float | None
+    recall_at_5: float | None
+    mrr_at_10: float | None
+    candidate_recall_at_50: float | None = None
+    candidate_unique_source_count: int = 0
+    distinct_source_recall_at_5: float | None = None
     duplicate_source_count_at_10: int = 0
-    citation_violation_count: int
     abstention_correct: bool
     # Fact only: did the pipeline trigger second retrieval? No expectation
     # comparison, no bad-case weight — purely diagnostic.
@@ -78,6 +78,7 @@ class CaseMetricResult(StrictModel):
     bad_case_categories: list[BadCaseCategory] = Field(default_factory=list)
     risk_level: str = ""
     workflow_failed: bool = False
+    workflow_outcome: WorkflowOutcome = "clean_success"
     failed_node: str | None = None
     failure_reason: str | None = None
     issue_count: int = 0
@@ -110,10 +111,13 @@ class ModeMetrics(StrictModel):
     total_llm_calls: int = 0
     total_retries: int = 0
     workflow_success_rate: float = 1.0
+    clean_success_rate: float = 1.0
+    degraded_success_rate: float = 0.0
+    hard_failure_rate: float = 0.0
+    source_bearing_case_count: int = 0
     critic_trigger_rate: float = 0.0
     critic_revision_rate: float = 0.0
     targeted_retrieval_trigger_rate: float = 0.0
-    total_citation_violations: int
     bad_case_count: int
     bad_case_taxonomy: dict[str, int] = Field(default_factory=dict)
     total_cases: int

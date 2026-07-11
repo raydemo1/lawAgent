@@ -12,7 +12,7 @@ extracting ranks, so the rank used by RRF reflects the boosted ordering.
 
 from __future__ import annotations
 
-from law_agent.review.retrieval.fusion import rrf_fuse, source_aware_fuse
+from law_agent.review.retrieval.fusion import rrf_fuse, rrf_fuse_many, source_aware_fuse
 from law_agent.review.schemas import RetrievalHit
 
 
@@ -150,3 +150,19 @@ def test_source_aware_fuse_prefers_specific_query_types_over_missing_information
     fused = source_aware_fuse([missing_hit, industry_hit], top_k=2)
 
     assert fused[0].source_id == "industry_source"
+
+
+def test_rrf_fuse_many_includes_issue_specific_candidates() -> None:
+    global_candidates = [
+        _make_hit(f"global_{index}", score=100 - index, rank=index)
+        for index in range(50)
+    ]
+    issue_candidate = _make_hit("issue_specific", score=1.0, rank=0)
+
+    fused = rrf_fuse_many(
+        [global_candidates, [issue_candidate]],
+        top_k=50,
+    )
+
+    assert len({hit.chunk_id for hit in fused}) == 50
+    assert "issue_specific" in {hit.chunk_id for hit in fused}

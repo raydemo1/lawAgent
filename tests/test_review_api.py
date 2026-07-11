@@ -333,7 +333,6 @@ def test_eval_run_accepts_retrieval_and_review_modes(
             mean_mrr_at_10=0.5,
             abstention_accuracy=1.0,
             second_retrieval_trigger_rate=0.0,
-            total_citation_violations=0,
             bad_case_count=0,
             total_cases=1,
         )

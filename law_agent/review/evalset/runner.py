@@ -326,21 +326,23 @@ def _run_single_case(
         # Get risk level and final citations from result.
         results_path = tmp_path / "review_results.jsonl"
         risk_level = ""
-        citation_groups = None
         if results_path.exists():
             results = read_review_results(results_path)
             if results:
                 result = results[0]
                 risk_level = result.risk_level
-                citation_groups = result.applicable_evidence
 
         case_metrics = evaluate_case(
             scenario,
             hits,
-            candidate_hits=[*trace.keyword_results, *trace.vector_results],
+            candidate_hits=trace.candidate_results,
             risk_level=risk_level,
             second_retrieval_triggered=second_retrieval_triggered,
-            citation_groups=citation_groups,
+        )
+        workflow_outcome = (
+            "degraded_success"
+            if any(step.status == "failed" for step in trace.agent_steps)
+            else "clean_success"
         )
         return case_metrics.model_copy(
             update={
@@ -362,6 +364,7 @@ def _run_single_case(
                     trace.critique_decision.reason if trace.critique_decision else None
                 ),
                 "agent_steps": trace.agent_steps,
+                "workflow_outcome": workflow_outcome,
             }
         )
 
@@ -378,15 +381,18 @@ def _run_single_case_safely(
     except ReviewWorkflowFailed as exc:
         return CaseMetricResult(
             case_id=scenario.case_id,
-            recall_at_3=0.0,
-            recall_at_5=0.0,
-            mrr_at_10=0.0,
-            citation_violation_count=0,
+            recall_at_3=None if not scenario.expected_sources else 0.0,
+            recall_at_5=None if not scenario.expected_sources else 0.0,
+            mrr_at_10=None if not scenario.expected_sources else 0.0,
+            candidate_recall_at_50=(
+                None if not scenario.expected_sources else 0.0
+            ),
             abstention_correct=False,
             is_bad_case=True,
             bad_reasons=[f"workflow_failed:{exc.failed_node}:{exc.reason}"],
             bad_case_categories=["workflow_error"],
             workflow_failed=True,
+            workflow_outcome="hard_failure",
             failed_node=exc.failed_node,
             failure_reason=exc.reason,
         )
@@ -420,6 +426,9 @@ def format_summary_text(summary: EvalSummary) -> str:
 
         lines.append(f"\n--- {mode_name.upper()} mode ---")
         lines.append(f"  Total cases:        {metrics.total_cases}")
+        lines.append(
+            f"  Source-bearing cases: {metrics.source_bearing_case_count}"
+        )
         lines.append(f"  Mean Recall@3:      {metrics.mean_recall_at_3:.4f}")
         lines.append(f"  Mean Recall@5:      {metrics.mean_recall_at_5:.4f}")
         lines.append(f"  Mean MRR@10:        {metrics.mean_mrr_at_10:.4f}")
@@ -436,6 +445,9 @@ def format_summary_text(summary: EvalSummary) -> str:
             )
         lines.append(f"  LLM calls / retries: {metrics.total_llm_calls} / {metrics.total_retries}")
         lines.append(f"  Workflow success rate: {metrics.workflow_success_rate:.4f}")
+        lines.append(f"  Clean success rate: {metrics.clean_success_rate:.4f}")
+        lines.append(f"  Degraded success rate: {metrics.degraded_success_rate:.4f}")
+        lines.append(f"  Hard failure rate: {metrics.hard_failure_rate:.4f}")
         if metrics.critic_trigger_rate:
             lines.append(f"  Critic trigger rate: {metrics.critic_trigger_rate:.4f}")
             lines.append(f"  Critic revision rate: {metrics.critic_revision_rate:.4f}")
@@ -443,7 +455,6 @@ def format_summary_text(summary: EvalSummary) -> str:
                 "  Targeted retrieval rate: "
                 f"{metrics.targeted_retrieval_trigger_rate:.4f}"
             )
-        lines.append(f"  Citation violations: {metrics.total_citation_violations}")
         lines.append(f"  Bad cases:          {metrics.bad_case_count}")
         if metrics.bad_case_taxonomy:
             taxonomy = ", ".join(
@@ -501,19 +512,22 @@ def format_summary_markdown(
                 "| Metric | Value |",
                 "|---|---:|",
                 f"| Total cases | {metrics.total_cases} |",
+                f"| Source-bearing cases | {metrics.source_bearing_case_count} |",
                 f"| Recall@3 | {metrics.mean_recall_at_3:.4f} |",
                 f"| Recall@5 | {metrics.mean_recall_at_5:.4f} |",
                 f"| MRR@10 | {metrics.mean_mrr_at_10:.4f} |",
                 f"| Candidate Recall@50 | {metrics.mean_candidate_recall_at_50:.4f} |",
                 f"| Abstention accuracy | {metrics.abstention_accuracy:.4f} |",
                 f"| Second retrieval trigger rate | {metrics.second_retrieval_trigger_rate:.4f} |",
-                f"| Citation violations | {metrics.total_citation_violations} |",
                 f"| Bad cases | {metrics.bad_case_count} |",
                 f"| Mean total latency (ms) | {_optional_number(metrics.mean_total_latency_ms)} |",
                 f"| Mean retrieval latency (ms) | {_optional_number(metrics.mean_retrieval_latency_ms)} |",
                 f"| Total LLM calls | {metrics.total_llm_calls} |",
                 f"| Total retries | {metrics.total_retries} |",
                 f"| Workflow success rate | {metrics.workflow_success_rate:.4f} |",
+                f"| Clean success rate | {metrics.clean_success_rate:.4f} |",
+                f"| Degraded success rate | {metrics.degraded_success_rate:.4f} |",
+                f"| Hard failure rate | {metrics.hard_failure_rate:.4f} |",
                 f"| Critic trigger rate | {metrics.critic_trigger_rate:.4f} |",
                 f"| Critic revision rate | {metrics.critic_revision_rate:.4f} |",
                 f"| Targeted retrieval trigger rate | {metrics.targeted_retrieval_trigger_rate:.4f} |",

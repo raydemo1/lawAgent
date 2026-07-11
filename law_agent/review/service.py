@@ -10,6 +10,7 @@ from typing import Literal
 from law_agent.config import RerankMode, load_rerank_config
 from law_agent.review.evidence import (
     evaluate_after_second_retrieval,
+    needs_llm_self_check,
     run_self_check,
     run_self_check_with_deepseek,
     validate_llm_self_check,
@@ -21,6 +22,7 @@ from law_agent.review.agents import (
     run_case_analyst,
     run_evidence_critic,
     select_issue_aware_hits,
+    should_run_case_analyst,
     should_run_evidence_critic,
 )
 from law_agent.review.facts import (
@@ -59,7 +61,7 @@ from law_agent.review.retrieval.adapters import (
     VectorSearchAdapter,
 )
 from law_agent.review.retrieval.corpus import DEFAULT_CHUNKS_PATH, CorpusError, load_corpus
-from law_agent.review.retrieval.fusion import rrf_fuse, source_aware_fuse
+from law_agent.review.retrieval.fusion import rrf_fuse, rrf_fuse_many, source_aware_fuse
 from law_agent.review.retrieval.keyword import KeywordRetriever, merge_hits_by_chunk_id
 from law_agent.review.retrieval.neighbors import expand_neighbors
 from law_agent.review.retrieval.rerank import rerank_hits
@@ -449,7 +451,8 @@ def run_hybrid_retrieval(
     multi_agent = review_mode == "multi_agent"
     agent_steps: list[AgentStep] = []
     issue_plan = None
-    if multi_agent:
+    analyst_routed = multi_agent and should_run_case_analyst(facts, case.question)
+    if analyst_routed:
         analyst_started = time.perf_counter()
         analyst_calls_before = current_telemetry().llm_call_count
         analysis = run_case_analyst(
@@ -471,6 +474,15 @@ def run_hybrid_retrieval(
                 ),
                 latency_ms=int((time.perf_counter() - analyst_started) * 1000),
                 llm_calls=current_telemetry().llm_call_count - analyst_calls_before,
+            )
+        )
+    elif multi_agent:
+        issue_plan = build_issue_plan(target_trace.queries)
+        agent_steps.append(
+            AgentStep(
+                agent_name="case_analyst",
+                status="skipped",
+                decision="deterministic routing: simple or single-path case",
             )
         )
     research_calls_before = current_telemetry().llm_call_count
@@ -582,7 +594,11 @@ def run_hybrid_retrieval(
     boosts_summary = compute_boosts_summary(facts, query_types)
 
     # Issue 7: Evidence self-check
-    if review_mode in ("llm", "multi_agent"):
+    if review_mode in ("llm", "multi_agent") and needs_llm_self_check(
+        question=case.question,
+        material_text=case.material.material_text,
+        facts=facts,
+    ):
         self_check = run_self_check_with_deepseek(
             hybrid_hits,
             facts,
@@ -602,7 +618,10 @@ def run_hybrid_retrieval(
         candidate_hits=hybrid_candidates,
         neighbor_hits=neighbor_hits,
     )
-    active_candidates = hybrid_candidates
+    active_candidates = rrf_fuse_many(
+        [hybrid_candidates, *issue_hits_by_issue.values()],
+        top_k=candidate_top_k,
+    )
     active_neighbor_hits = neighbor_hits
 
     if self_check.status == "needs_second_retrieval" and self_check.second_retrieval_plan:
@@ -709,7 +728,10 @@ def run_hybrid_retrieval(
             candidate_hits=hybrid2_candidates,
             neighbor_hits=neighbor2_hits,
         )
-        active_candidates = hybrid2_candidates
+        active_candidates = rrf_fuse_many(
+            [hybrid2_candidates, *issue_hits_by_issue.values()],
+            top_k=candidate_top_k,
+        )
         active_neighbor_hits = neighbor2_hits
         second_retrieval_info = {
             "triggered": True,
@@ -727,6 +749,7 @@ def run_hybrid_retrieval(
                 "keyword_results": boosted_kw2_all,
                 "vector_results": boosted_vec2_all,
                 "hybrid_results": hybrid2_hits,
+                "candidate_results": active_candidates,
                 "neighbor_chunks": neighbor2_hits,
                 "metadata_boosts": boosts_summary,
                 "rerank": rerank_info,
@@ -742,6 +765,7 @@ def run_hybrid_retrieval(
                 "keyword_results": boosted_keyword_all,
                 "vector_results": boosted_vector_all,
                 "hybrid_results": hybrid_hits,
+                "candidate_results": active_candidates,
                 "neighbor_chunks": neighbor_hits,
                 "metadata_boosts": boosts_summary,
                 "rerank": rerank_info,
@@ -811,7 +835,9 @@ def run_hybrid_retrieval(
                 AgentStep(
                     agent_name="compliance_reviewer",
                     status="failed",
-                    decision=f"deterministic fallback: {exc.reason}",
+                    decision=(
+                        f"deterministic fallback: {exc.reason}: {exc.message}"
+                    ),
                     latency_ms=int((time.perf_counter() - reviewer_started) * 1000),
                     llm_calls=current_telemetry().llm_call_count - reviewer_calls_before,
                 )
@@ -925,7 +951,14 @@ def run_hybrid_retrieval(
                 targeted_neighbors = expand_neighbors(
                     final_evidence[:5], chunks_by_id, max_neighbors=max_neighbors
                 )
-                active_candidates = list(active_candidates) + targeted_candidates
+                active_candidates = rrf_fuse_many(
+                    [
+                        active_candidates,
+                        targeted_candidates,
+                        *issue_hits_by_issue.values(),
+                    ],
+                    top_k=candidate_top_k,
+                )
                 active_neighbor_hits = list(active_neighbor_hits) + targeted_neighbors
                 source_evidence_packets = build_source_evidence_packets(
                     representative_hits=final_evidence,
@@ -948,6 +981,7 @@ def run_hybrid_retrieval(
                     update={
                         "queries": list(updated_trace.queries) + targeted_queries,
                         "hybrid_results": final_evidence,
+                        "candidate_results": active_candidates,
                         "neighbor_chunks": targeted_neighbors,
                         "final_evidence": final_evidence,
                         "source_evidence_packets": source_evidence_packets,
@@ -985,7 +1019,9 @@ def run_hybrid_retrieval(
                         AgentStep(
                             agent_name="compliance_revision",
                             status="failed",
-                            decision=f"kept original result: {exc.reason}",
+                            decision=(
+                                f"kept original result: {exc.reason}: {exc.message}"
+                            ),
                             latency_ms=int(
                                 (time.perf_counter() - revision_started) * 1000
                             ),

@@ -8,7 +8,6 @@ from law_agent.review.evalset.metrics import (
     compute_recall_at_k,
     compute_source_pool_recall,
     distinct_source_hits_at_k,
-    count_citation_violations,
     evaluate_case,
     ordered_unique_sources,
 )
@@ -117,7 +116,7 @@ def test_recall_at_k_partial() -> None:
 def test_recall_at_k_empty_expected() -> None:
     hits = [_hit(source_id="s1")]
     score, missing = compute_recall_at_k(hits, [], k=5)
-    assert score == 1.0
+    assert score is None
     assert missing == []
 
 
@@ -179,26 +178,7 @@ def test_mrr_at_k_not_found() -> None:
 
 def test_mrr_at_k_empty_expected() -> None:
     hits = [_hit(source_id="s1")]
-    assert compute_mrr_at_k(hits, [], k=10) == 1.0
-
-
-# ---------------------------------------------------------------------------
-# Citation violation tests
-# ---------------------------------------------------------------------------
-
-def test_citation_violations_none() -> None:
-    hits = [_hit(chunk_id="c1", can_cite=True)]
-    assert count_citation_violations(hits, []) == 0
-
-
-def test_citation_violations_detected() -> None:
-    hits = [_hit(chunk_id="forbidden", can_cite=True)]
-    assert count_citation_violations(hits, ["forbidden"]) == 1
-
-
-def test_citation_violations_not_counted_if_not_citable() -> None:
-    hits = [_hit(chunk_id="forbidden", can_cite=False)]
-    assert count_citation_violations(hits, ["forbidden"]) == 0
+    assert compute_mrr_at_k(hits, [], k=10) is None
 
 
 # ---------------------------------------------------------------------------
@@ -352,24 +332,6 @@ def test_evaluate_case_second_retrieval_recorded_as_fact() -> None:
     assert "second_retrieval_error" not in not_triggered.bad_case_categories
 
 
-def test_evaluate_case_citation_violation_is_bad() -> None:
-    scenario = EvalScenario(
-        case_id="test_007",
-        question="问题",
-        material_text="材料",
-        expected_sources=["s1"],
-        must_not_cite_as_clause=["bad_chunk"],
-    )
-    hits = [_hit(source_id="s1", chunk_id="bad_chunk", can_cite=True)]
-
-    result = evaluate_case(scenario, hits)
-
-    assert result.citation_violation_count == 1
-    assert result.is_bad_case is True
-    assert any("citation_violations" in r for r in result.bad_reasons)
-    assert "citation_gate_error" in result.bad_case_categories
-
-
 # ---------------------------------------------------------------------------
 # Aggregate metrics tests
 # ---------------------------------------------------------------------------
@@ -380,7 +342,7 @@ def test_aggregate_metrics_calculates_means() -> None:
             case_id="c1", recall_at_3=1.0, recall_at_5=1.0, mrr_at_10=1.0,
             candidate_recall_at_50=1.0, distinct_source_recall_at_5=1.0,
             duplicate_source_count_at_10=0,
-            citation_violation_count=0, abstention_correct=True,
+            abstention_correct=True,
             second_retrieval_triggered=True,
             total_latency_ms=100,
             retrieval_latency_ms=40,
@@ -391,7 +353,7 @@ def test_aggregate_metrics_calculates_means() -> None:
             case_id="c2", recall_at_3=0.5, recall_at_5=0.5, mrr_at_10=0.5,
             candidate_recall_at_50=0.75, distinct_source_recall_at_5=0.25,
             duplicate_source_count_at_10=2,
-            citation_violation_count=1, abstention_correct=False,
+            abstention_correct=False,
             second_retrieval_triggered=False, is_bad_case=True,
             total_latency_ms=300,
             retrieval_latency_ms=80,
@@ -416,7 +378,6 @@ def test_aggregate_metrics_calculates_means() -> None:
     assert metrics.mean_retrieval_latency_ms == 60.0
     assert metrics.total_llm_calls == 6
     assert metrics.total_retries == 1
-    assert metrics.total_citation_violations == 1
     assert metrics.bad_case_count == 1
     assert metrics.bad_case_taxonomy == {"abstention_error": 1}
     assert metrics.total_cases == 2
@@ -498,7 +459,6 @@ def test_format_summary_text_contains_key_metrics() -> None:
                 mean_retrieval_latency_ms=45.6,
                 total_llm_calls=8,
                 total_retries=1,
-                total_citation_violations=0,
                 bad_case_count=1,
                 total_cases=10,
             ),

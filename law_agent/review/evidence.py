@@ -294,6 +294,32 @@ def run_self_check(
     )
 
 
+def needs_llm_self_check(
+    *, question: str, material_text: str, facts: ReviewFacts
+) -> bool:
+    """Return whether scope or sparse-fact ambiguity needs semantic judgment."""
+
+    text = f"{question}\n{material_text}".lower()
+    out_of_scope_markers = (
+        "eu ai act",
+        "欧盟 ai act",
+        "ccpa",
+        "cpra",
+        "gdpr",
+    )
+    if any(marker in text for marker in out_of_scope_markers):
+        return True
+    substantive_facts = (
+        facts.business_activity,
+        facts.data_types,
+        facts.cross_border_transfer,
+        facts.processing_purpose,
+        facts.industry,
+        facts.region,
+    )
+    return not any(value not in (None, "", []) for value in substantive_facts)
+
+
 # ---------------------------------------------------------------------------
 # DeepSeek evidence checker
 # ---------------------------------------------------------------------------

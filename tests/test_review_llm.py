@@ -592,20 +592,7 @@ def test_revision_applies_bounded_patch_without_regenerating_other_fields() -> N
         trigger_reasons=["automotive"],
         recommended_actions=["完成内部评估"],
     )
-    client = FakeClient(
-        outputs=[
-            {
-                "risk_level": "medium",
-                "conclusion": "该活动可能涉及测绘监管，需补充直接法律依据后判断。",
-                "remove_claim_indexes": [0],
-                "replace_claims": [],
-                "add_claims": [],
-                "append_missing_information": ["测绘活动认定的直接法律依据"],
-                "append_recommended_actions": [],
-                "append_risk_boundaries": ["当前证据不足以作确定认定"],
-            }
-        ]
-    )
+    client = FakeClient(outputs=[])
 
     result = revise_review_result_with_deepseek(
         result=original,
@@ -621,11 +608,45 @@ def test_revision_applies_bounded_patch_without_regenerating_other_fields() -> N
         max_retries=0,
     )
 
-    assert result.risk_level == "medium"
-    assert result.claims == []
+    assert result.risk_level == "high"
+    assert len(result.claims) == 1
     assert result.trigger_reasons == ["automotive"]
     assert result.recommended_actions == ["完成内部评估"]
-    assert "测绘活动认定" in result.missing_information[0]
+    assert "测绘法条文" in result.missing_information[0]
+    assert client.calls == []
+
+
+def test_non_abstain_revision_cannot_transition_to_insufficient_evidence() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="medium",
+        conclusion="当前证据支持有界的中风险判断。",
+        review_facts=ReviewFacts(),
+        claims=[{"text": "存在有界风险。", "supporting_chunk_ids": ["c1"]}],
+    )
+    client = FakeClient(outputs=[{
+        "risk_level": "insufficient_evidence",
+        "conclusion": "证据不足。",
+        "remove_claim_indexes": [0],
+        "replace_claims": [],
+        "add_claims": [],
+        "append_missing_information": [],
+        "append_recommended_actions": [],
+        "append_risk_boundaries": [],
+    }])
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[RevisionAction(
+            operation="narrow_claim", claim_index=0, reason="需要收窄"
+        )],
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+    assert result.risk_level == "medium"
+    assert len(result.claims) == 1
 
 
 def test_revision_rejects_legal_source_absent_from_evidence() -> None:
@@ -709,7 +730,7 @@ def test_out_of_corpus_revision_is_deterministic_and_does_not_call_llm() -> None
     assert client.calls == []
 
 
-def test_revision_cannot_add_claim_without_critic_add_action() -> None:
+def test_revision_compiles_single_add_as_narrow_replacement() -> None:
     original = ReviewResult(
         review_result_id="result_1",
         review_case_id="review_1",
@@ -744,19 +765,81 @@ def test_revision_cannot_add_claim_without_critic_add_action() -> None:
         ]
     )
 
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[
+            RevisionAction(
+                operation="narrow_claim",
+                claim_index=0,
+                reason="只允许收窄",
+            )
+        ],
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert len(result.claims) == 1
+    assert result.claims[0].text == "擅自新增的确定性结论。"
+
+
+def test_revision_compiler_prefers_replacement_over_duplicate_removal() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="medium",
+        conclusion="原结论。",
+        review_facts=ReviewFacts(),
+        claims=[{"text": "原主张。", "supporting_chunk_ids": ["c1"]}],
+    )
+    client = FakeClient(outputs=[{
+        "risk_level": None,
+        "conclusion": "收窄后的结论。",
+        "remove_claim_indexes": [0],
+        "replace_claims": [{
+            "claim_index": 0,
+            "claim": {"text": "收窄后的主张。", "supporting_chunk_ids": ["c1"]},
+        }],
+        "add_claims": [],
+        "append_missing_information": [],
+        "append_recommended_actions": [],
+        "append_risk_boundaries": [],
+    }])
+
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[RevisionAction(
+            operation="narrow_claim", claim_index=0, reason="收窄"
+        )],
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert [claim.text for claim in result.claims] == ["收窄后的主张。"]
+
+
+def test_revision_application_failure_is_a_degraded_workflow_failure() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="medium",
+        conclusion="原结论。",
+        review_facts=ReviewFacts(),
+        claims=[{"text": "原主张。", "supporting_chunk_ids": ["old_chunk"]}],
+    )
+
     with pytest.raises(ReviewWorkflowFailed) as exc_info:
         revise_review_result_with_deepseek(
             result=original,
-            actions=[
-                RevisionAction(
-                    operation="narrow_claim",
-                    claim_index=0,
-                    reason="只允许收窄",
-                )
-            ],
+            actions=[RevisionAction(
+                operation="mark_evidence_gap", reason="缺少当前依据"
+            )],
             evidence_hits=[_hit()],
-            client=client,  # type: ignore[arg-type]
+            client=FakeClient(outputs=[]),  # type: ignore[arg-type]
             max_retries=0,
         )
 
-    assert exc_info.value.reason == "revision_patch_validation_failed"
+    assert exc_info.value.reason == "revision_patch_application_failed"

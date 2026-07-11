@@ -5,6 +5,7 @@ from law_agent.review.agents import (
     build_evidence_dossiers,
     build_issue_plan,
     run_case_analyst,
+    should_run_case_analyst,
     run_evidence_critic,
     gate_revision_actions,
     select_issue_aware_hits,
@@ -100,6 +101,24 @@ def test_case_analyst_adds_issue_specific_queries_without_replacing_frozen_input
     ]
 
 
+def test_case_analyst_routing_requires_compound_complexity() -> None:
+    assert should_run_case_analyst(
+        ReviewFacts(
+            cross_border_transfer=True,
+            sensitive_personal_info=True,
+        ),
+        "是否需要申报？",
+    )
+    assert should_run_case_analyst(
+        ReviewFacts(cross_border_transfer=True),
+        "安全评估与标准合同发生冲突时如何选择？",
+    )
+    assert not should_run_case_analyst(
+        ReviewFacts(cross_border_transfer=True),
+        "是否需要申报？",
+    )
+
+
 def test_issue_aware_selection_reserves_evidence_for_each_issue() -> None:
     plan = build_issue_plan(
         [
@@ -126,6 +145,35 @@ def test_issue_aware_selection_reserves_evidence_for_each_issue() -> None:
 
     assert {hit.chunk_id for hit in selected} == {"legal", "region", "global"}
     assert [hit.rank for hit in selected] == [1, 2, 3]
+
+
+def test_issue_aware_selection_does_not_force_weak_medium_hit_into_top_five() -> None:
+    plan = build_issue_plan(
+        [RetrievalQuery(query_id="q_1", query_type="region_condition", text="地区条件")]
+    )
+    global_hits = [
+        _hit().model_copy(
+            update={
+                "chunk_id": f"global_{index}",
+                "source_id": f"global_source_{index}",
+                "score": 1.0 - index * 0.1,
+                "rank": index,
+            }
+        )
+        for index in range(5)
+    ]
+    weak_region = _hit().model_copy(
+        update={"chunk_id": "weak_region", "source_id": "weak_region_source"}
+    )
+
+    selected = select_issue_aware_hits(
+        plan,
+        {"issue_1": [weak_region]},
+        global_hits,
+        top_k=5,
+    )
+
+    assert "weak_region" not in {hit.chunk_id for hit in selected}
 
 
 def test_dossiers_can_use_issue_specific_candidate_pools() -> None:

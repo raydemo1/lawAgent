@@ -112,6 +112,39 @@ def rrf_fuse(
     return fused
 
 
+def rrf_fuse_many(
+    ranked_lists: list[list[RetrievalHit]],
+    *,
+    top_k: int = 50,
+    k: int = DEFAULT_RRF_K,
+) -> list[RetrievalHit]:
+    """Fuse any number of ranked candidate lists into unique chunk candidates."""
+
+    scores: dict[str, float] = defaultdict(float)
+    hit_by_chunk: dict[str, RetrievalHit] = {}
+    for hits in ranked_lists:
+        ordered = sorted(hits, key=lambda hit: (-hit.score, hit.chunk_id))
+        seen: set[str] = set()
+        for rank, hit in enumerate(ordered):
+            if hit.chunk_id in seen:
+                continue
+            seen.add(hit.chunk_id)
+            scores[hit.chunk_id] += 1.0 / (k + rank)
+            hit_by_chunk.setdefault(hit.chunk_id, hit)
+
+    ordered_scores = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return [
+        hit_by_chunk[chunk_id].model_copy(
+            update={
+                "score": round(score, 6),
+                "rank": rank,
+                "retriever": "hybrid",
+            }
+        )
+        for rank, (chunk_id, score) in enumerate(ordered_scores[:top_k])
+    ]
+
+
 def source_aware_fuse(
     hits: list[RetrievalHit],
     *,

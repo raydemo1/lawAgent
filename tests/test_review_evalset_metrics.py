@@ -1,17 +1,8 @@
-"""Tests for citation-violation counting based on final citations (Bug 2).
+"""Evaluation-contract regression tests."""
 
-Bug: ``count_citation_violations()`` checked retrieval ``hits`` with
-``can_cite_clause=True``. That produced false positives (a forbidden chunk
-retrieved but NOT used as a final clause-level citation) and false negatives
-(a demoted citation with ``can_cite_clause=False`` but ``usage="legal_basis"``).
-
-The fix counts violations against the final ``CitationGroup`` /
-``ReviewResult.citations`` where ``usage in ("legal_basis", "conditional_basis")``.
-"""
-
-from law_agent.review.evalset.metrics import evaluate_case
+from law_agent.review.evalset.metrics import aggregate_metrics, evaluate_case
 from law_agent.review.evalset.schemas import EvalScenario
-from law_agent.review.schemas import Citation, CitationGroup, RetrievalHit
+from law_agent.review.schemas import RetrievalHit
 
 
 # ---------------------------------------------------------------------------
@@ -32,123 +23,41 @@ def _hit(
     )
 
 
-def _citation(
-    source_id: str = "s1",
-    chunk_id: str = "c1",
-    citation_role: str = "primary_legal_basis",
-    can_cite_clause: bool = True,
-    usage: str = "legal_basis",
-) -> Citation:
-    return Citation(
-        source_id=source_id,
-        chunk_id=chunk_id,
-        title="t",
-        source_url="u",
-        citation_role=citation_role,
-        can_cite_clause=can_cite_clause,
-        usage=usage,
-    )
-
-
-def _scenario(must_not_cite_as_clause: list[str]) -> EvalScenario:
+def _scenario(expected_sources: list[str]) -> EvalScenario:
     return EvalScenario(
         case_id="test_citation",
         question="问题",
         material_text="材料",
-        expected_sources=["s1"],
-        must_not_cite_as_clause=must_not_cite_as_clause,
+        expected_sources=expected_sources,
     )
 
 
 # ---------------------------------------------------------------------------
-# Bug 2: citation violations must use final citations, not raw retrieval hits
-# ---------------------------------------------------------------------------
-
-def test_citation_violation_uses_final_citations_not_hits() -> None:
-    """A forbidden chunk retrieved but NOT used as a final clause-level
-    citation must NOT be counted as a violation.
-
-    Under the old hit-based logic, the forbidden chunk appearing in
-    ``hits`` with ``can_cite_clause=True`` would be a violation. But here it
-    is demoted to ``implementation_reference`` in the final citation groups,
-    so it is not cited as ``legal_basis`` / ``conditional_basis`` and the
-    violation count must be 0.
-    """
-
-    scenario = _scenario(must_not_cite_as_clause=["chunk_forbidden"])
-
-    # Retrieval hits include the forbidden chunk with can_cite_clause=True.
-    hits = [
-        _hit(source_id="s1", chunk_id="chunk_ok", can_cite=True, rank=0),
-        _hit(source_id="s2", chunk_id="chunk_forbidden", can_cite=True, rank=1),
-    ]
-
-    # Final citations: chunk_forbidden is demoted to implementation_reference,
-    # NOT a clause-level (legal_basis / conditional_basis) citation.
-    citation_groups = [
-        CitationGroup(
-            usage="legal_basis",
-            citations=[
-                _citation(
-                    source_id="s1", chunk_id="chunk_ok",
-                    citation_role="primary_legal_basis",
-                    can_cite_clause=True, usage="legal_basis",
-                ),
-            ],
-        ),
-        CitationGroup(
-            usage="implementation_reference",
-            citations=[
-                _citation(
-                    source_id="s2", chunk_id="chunk_forbidden",
-                    citation_role="implementation_reference",
-                    can_cite_clause=False, usage="implementation_reference",
-                ),
-            ],
-        ),
-    ]
-
-    result = evaluate_case(scenario, hits, citation_groups=citation_groups)
-
-    assert result.citation_violation_count == 0
-    assert not any("citation_violations" in r for r in result.bad_reasons)
+def test_empty_expected_sources_are_not_retrieval_scores() -> None:
+    result = evaluate_case(_scenario([]), [_hit()])
+    assert result.recall_at_3 is None
+    assert result.recall_at_5 is None
+    assert result.mrr_at_10 is None
+    assert result.candidate_recall_at_50 is None
 
 
-def test_citation_violation_detected_in_final_legal_basis() -> None:
-    """A forbidden chunk used as a ``legal_basis`` final citation IS a
-    violation, even if the demotion bug set ``can_cite_clause=False``.
-    """
+def test_aggregate_retrieval_uses_only_source_bearing_cases() -> None:
+    bearing = evaluate_case(_scenario(["s1"]), [_hit(source_id="s1")])
+    abstain = evaluate_case(_scenario([]), [])
+    metrics = aggregate_metrics([bearing, abstain], "service_multi_agent")
+    assert metrics.source_bearing_case_count == 1
+    assert metrics.mean_recall_at_5 == 1.0
 
-    scenario = _scenario(must_not_cite_as_clause=["chunk_forbidden"])
 
-    hits = [
-        _hit(source_id="s1", chunk_id="chunk_ok", can_cite=True, rank=0),
-        _hit(source_id="s2", chunk_id="chunk_forbidden", can_cite=True, rank=1),
-    ]
-
-    # chunk_forbidden appears in a legal_basis citation group -> violation.
-    # Note can_cite_clause=False mimics the demotion bug; the final usage is
-    # what matters now.
-    citation_groups = [
-        CitationGroup(
-            usage="legal_basis",
-            citations=[
-                _citation(
-                    source_id="s1", chunk_id="chunk_ok",
-                    citation_role="primary_legal_basis",
-                    can_cite_clause=True, usage="legal_basis",
-                ),
-                _citation(
-                    source_id="s2", chunk_id="chunk_forbidden",
-                    citation_role="primary_legal_basis",
-                    can_cite_clause=False, usage="legal_basis",
-                ),
-            ],
-        ),
-    ]
-
-    result = evaluate_case(scenario, hits, citation_groups=citation_groups)
-
-    assert result.citation_violation_count == 1
-    assert result.is_bad_case is True
-    assert any("citation_violations" in r for r in result.bad_reasons)
+def test_candidate_recall_uses_strict_unique_top_50_chunks() -> None:
+    candidates = [
+        _hit(source_id="noise", chunk_id=f"noise-{index}", rank=index)
+        for index in range(50)
+    ] + [_hit(source_id="s1", chunk_id="expected-too-late", rank=50)]
+    result = evaluate_case(
+        _scenario(["s1"]),
+        [_hit(source_id="s1", chunk_id="final")],
+        candidate_hits=candidates,
+    )
+    assert result.candidate_recall_at_50 == 0.0
+    assert result.candidate_unique_source_count == 1

@@ -31,6 +31,7 @@ from law_agent.review.llm import ReviewWorkflowFailed, StructuredLLMNode
 from law_agent.review.schemas import (
     Citation,
     CitationGroup,
+    ClaimReplacement,
     EvidenceSelfCheck,
     GroundedClaim,
     ReviewFacts,
@@ -1190,6 +1191,14 @@ def _validate_revision_patch(
         )
     ):
         raise ValueError("revision patch cannot change risk for these actions")
+    if (
+        patch.risk_level == "insufficient_evidence"
+        and result.risk_level != "insufficient_evidence"
+        and "abstain" not in operations
+    ):
+        raise ValueError(
+            "only an explicit abstain action may transition to insufficient_evidence"
+        )
 
     allowed_ids = {hit.chunk_id for hit in evidence_hits if hit.can_cite_clause}
     proposed_claims = [
@@ -1223,6 +1232,72 @@ def _validate_revision_patch(
             f"revision introduced unavailable legal sources: {unavailable_titles}"
         )
     return patch
+
+
+def _normalize_revision_patch(
+    patch: ReviewResultPatch,
+    *,
+    result: ReviewResult,
+    actions: list[RevisionAction],
+) -> ReviewResultPatch:
+    """Compile common LLM patch-shape mistakes into one safe deterministic delta."""
+
+    operations = {action.operation for action in actions}
+    narrow_indexes = [
+        action.claim_index
+        for action in actions
+        if action.operation == "narrow_claim" and action.claim_index is not None
+    ]
+    explicit_remove_indexes = {
+        action.claim_index
+        for action in actions
+        if action.operation == "remove_claim" and action.claim_index is not None
+    }
+
+    replacements = list(patch.replace_claims)
+    additions = list(patch.add_claims)
+    if "add_supported_claim" not in operations and additions:
+        if len(additions) == 1 and len(narrow_indexes) == 1:
+            replacements.append(
+                ClaimReplacement(
+                    claim_index=narrow_indexes[0],
+                    claim=additions[0],
+                )
+            )
+        additions = []
+
+    unique_replacements: dict[int, ClaimReplacement] = {}
+    for replacement in replacements:
+        unique_replacements.setdefault(replacement.claim_index, replacement)
+    for index in explicit_remove_indexes:
+        unique_replacements.pop(index, None)
+
+    replacement_indexes = set(unique_replacements)
+    remove_indexes = sorted(
+        {
+            index
+            for index in patch.remove_claim_indexes
+            if index not in replacement_indexes or index in explicit_remove_indexes
+        }
+    )
+    if "remove_claim" not in operations and "abstain" not in operations:
+        remove_indexes = []
+    risk_level = patch.risk_level
+    if (
+        risk_level == "insufficient_evidence"
+        and result.risk_level != "insufficient_evidence"
+        and "abstain" not in operations
+    ):
+        risk_level = None
+
+    return patch.model_copy(
+        update={
+            "risk_level": risk_level,
+            "remove_claim_indexes": remove_indexes,
+            "replace_claims": list(unique_replacements.values()),
+            "add_claims": additions,
+        }
+    )
 
 
 def apply_review_result_patch(
@@ -1285,6 +1360,32 @@ def apply_review_result_patch(
     )
 
 
+def _apply_revision_patch_or_fail(
+    *,
+    result: ReviewResult,
+    patch: ReviewResultPatch,
+    evidence_hits: list[RetrievalHit],
+    chunks_by_id: dict[str, Chunk] | None,
+) -> ReviewResult:
+    """Convert patch-application invariant failures into a degradable node failure."""
+
+    try:
+        return apply_review_result_patch(
+            result=result,
+            patch=patch,
+            evidence_hits=evidence_hits,
+            chunks_by_id=chunks_by_id,
+        )
+    except ValueError as exc:
+        raise ReviewWorkflowFailed(
+            failed_node="compliance_revision",
+            reason="revision_patch_application_failed",
+            message=str(exc),
+            attempts=0,
+            trace_id=result.trace_id,
+        ) from exc
+
+
 def revise_review_result_with_deepseek(
     *,
     result: ReviewResult,
@@ -1314,13 +1415,61 @@ def revise_review_result_with_deepseek(
             }
         )
 
+    deterministic_actions = [
+        action
+        for action in actions
+        if action.operation in {"remove_claim", "mark_evidence_gap", "abstain"}
+    ]
+    language_actions = [
+        action
+        for action in actions
+        if action.operation
+        in {"narrow_claim", "add_supported_claim", "change_risk_boundary"}
+    ]
+    if deterministic_actions:
+        remove_indexes = sorted(
+            {
+                action.claim_index
+                for action in deterministic_actions
+                if action.operation == "remove_claim" and action.claim_index is not None
+            }
+        )
+        gaps = [
+            action.reason
+            for action in deterministic_actions
+            if action.operation in {"mark_evidence_gap", "abstain"}
+        ]
+        abstain = any(action.operation == "abstain" for action in deterministic_actions)
+        conclusion = None
+        if remove_indexes:
+            conclusion = "已移除缺乏当前证据支持的结论，其余判断仅在现有证据边界内成立。"
+        if abstain:
+            conclusion = "当前材料与可引用证据不足以支持实体合规判断。"
+            remove_indexes = list(range(len(result.claims)))
+        deterministic_patch = ReviewResultPatch(
+            risk_level="insufficient_evidence" if abstain else None,
+            conclusion=conclusion,
+            remove_claim_indexes=remove_indexes,
+            append_missing_information=gaps,
+            append_risk_boundaries=gaps,
+        )
+        result = _apply_revision_patch_or_fail(
+            result=result,
+            patch=deterministic_patch,
+            evidence_hits=evidence_hits,
+            chunks_by_id=chunks_by_id,
+        )
+        if not language_actions or result.risk_level == "insufficient_evidence":
+            return result
+        actions = language_actions
+
     if client is None:
         client = OpenAICompatibleClient(require_llm_config())
     node = StructuredLLMNode(
         node_name="compliance_revision",
         output_model=ReviewResultPatch,
         client=client,
-        max_retries=max_retries,
+        max_retries=min(max_retries if max_retries is not None else 1, 1),
         trace_id=result.trace_id,
     )
     patch = node.run(
@@ -1330,14 +1479,14 @@ def revise_review_result_with_deepseek(
             evidence_hits=evidence_hits,
         ),
         post_validate=lambda candidate: _validate_revision_patch(
-            candidate,
+            _normalize_revision_patch(candidate, result=result, actions=actions),
             result=result,
             actions=actions,
             evidence_hits=evidence_hits,
         ),
         post_validation_reason="revision_patch_validation_failed",
     )
-    return apply_review_result_patch(
+    return _apply_revision_patch_or_fail(
         result=result,
         patch=patch,
         evidence_hits=evidence_hits,

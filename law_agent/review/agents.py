@@ -54,6 +54,21 @@ def build_issue_plan(queries: list[RetrievalQuery]) -> IssuePlan:
     return IssuePlan(issues=issues)
 
 
+def should_run_case_analyst(facts: object, question: str) -> bool:
+    """Route only compound cases through the LLM-owned Analyst module."""
+
+    facets = (
+        bool(getattr(facts, "region", None)),
+        bool(getattr(facts, "industry", None)),
+        getattr(facts, "cross_border_transfer", None) is True,
+        getattr(facts, "sensitive_personal_info", None) is True,
+    )
+    compound_sensitive_path = sum(facets) >= 2 and (facets[2] or facets[3])
+    conflict_markers = ("冲突", "比较", "哪个", "边界", "分别", "同时满足", "优先")
+    explicit_path_conflict = any(marker in question for marker in conflict_markers)
+    return compound_sensitive_path or explicit_path_conflict
+
+
 def build_case_analyst_messages(
     *,
     question: str,
@@ -204,7 +219,7 @@ def select_issue_aware_hits(
     *,
     top_k: int,
 ) -> list[RetrievalHit]:
-    """Reserve evidence capacity per issue, then fill globally with source diversity."""
+    """Allocate evidence using global strength plus score-aware issue support."""
 
     if top_k <= 0:
         return []
@@ -228,19 +243,21 @@ def select_issue_aware_hits(
                 return True
         return False
 
-    # Preserve three strong baseline anchors before issue allocation. This keeps
-    # issue-specific queries from displacing already-good general retrieval.
+    # Preserve three strong global anchors. At most one high-priority issue
+    # may displace a global source in Top-5; the remainder stays globally ranked.
     for hit in global_hits[: min(3, top_k)]:
         add_best([hit])
 
-    # Each issue can then contribute one source when capacity allows.
+    high_priority = [issue for issue in issues if issue.priority == "high"]
+    if high_priority and len(selected) < top_k:
+        add_best(issue_hits_by_issue.get(high_priority[0].issue_id, []))
+
+    while len(selected) < top_k and add_best(global_hits):
+        pass
     for issue in issues:
         if len(selected) >= top_k:
             break
         add_best(issue_hits_by_issue.get(issue.issue_id, []))
-
-    while len(selected) < top_k and add_best(global_hits):
-        pass
 
     return [
         hit.model_copy(update={"rank": rank, "retriever": "hybrid"})
