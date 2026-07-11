@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 
 from law_agent.config import require_llm_config
 from law_agent.llm.openai_compatible import ChatMessage, OpenAICompatibleClient
 from law_agent.review.llm import StructuredLLMNode
+from law_agent.review.retrieval.keyword import tokenize
 from law_agent.review.schemas import (
     CaseAnalysis,
     CritiqueDecision,
@@ -15,6 +17,7 @@ from law_agent.review.schemas import (
     IssuePlan,
     ReviewIssue,
     ReviewResult,
+    RevisionAction,
     RetrievalHit,
     RetrievalQuery,
     RetrievalQueryType,
@@ -259,6 +262,114 @@ def should_run_evidence_critic(
     )
 
 
+def gate_revision_actions(
+    decision: CritiqueDecision,
+    *,
+    issue_hits_by_issue: dict[str, list[RetrievalHit]],
+    targeted_hits_by_issue: dict[str, list[RetrievalHit]] | None = None,
+) -> list[RevisionAction]:
+    """Downgrade impossible evidence additions before the Revision node."""
+
+    targeted_hits_by_issue = targeted_hits_by_issue or {}
+    actions = list(decision.revision_actions)
+    if not actions:
+        actions = [
+            RevisionAction(operation="narrow_claim", reason=instruction)
+            for instruction in decision.revision_instructions
+        ]
+
+    gated: list[RevisionAction] = []
+
+    def relevant(hit: RetrievalHit, request_text: str) -> bool:
+        stop_terms = {
+            "法律",
+            "法规",
+            "依据",
+            "条文",
+            "直接",
+            "要求",
+            "缺少",
+            "补充",
+            "规定",
+            "制度",
+            "问题",
+            "相关",
+            "当前",
+            "证据",
+        }
+        hit_text = f"{hit.title} {hit.text[:800]}"
+        english_anchors = {
+            token.casefold()
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9-]*", request_text)
+            if token.casefold() not in {"law", "legal", "rule", "rules"}
+        }
+        if english_anchors and not english_anchors.issubset(
+            set(re.findall(r"[A-Za-z][A-Za-z0-9-]*", hit_text.casefold()))
+        ):
+            return False
+        request_terms = {
+            term
+            for term in tokenize(request_text)
+            if term not in stop_terms and len(term) > 1
+        }
+        if not request_terms:
+            return False
+        hit_terms = set(tokenize(hit_text))
+        return bool(request_terms & hit_terms)
+
+    for action in actions:
+        if action.operation != "add_supported_claim":
+            gated.append(action)
+            continue
+        issue_hits = issue_hits_by_issue.get(action.issue_id or "", [])
+        action_text = f"{action.reason} {action.replacement_text or ''}"
+        allowed = {
+            hit.chunk_id
+            for hit in issue_hits
+            if hit.can_cite_clause and relevant(hit, action_text)
+        }
+        requested = set(action.supporting_chunk_ids)
+        if requested and requested.issubset(allowed):
+            gated.append(action)
+            continue
+        gated.append(
+            RevisionAction(
+                operation="mark_evidence_gap",
+                issue_id=action.issue_id,
+                reason=(
+                    "定向检索后仍未召回 Critic 要求的可引用法条；"
+                    f"不得新增结论。原要求：{action.reason}"
+                ),
+            )
+        )
+
+    existing_gap_issues = {
+        action.issue_id
+        for action in gated
+        if action.operation == "mark_evidence_gap"
+    }
+    for request in decision.targeted_retrieval_requests:
+        targeted_citable = [
+            hit
+            for hit in targeted_hits_by_issue.get(request.issue_id, [])
+            if hit.can_cite_clause
+            and relevant(hit, f"{request.query} {request.reason}")
+        ]
+        if targeted_citable or request.issue_id in existing_gap_issues:
+            continue
+        gated.append(
+            RevisionAction(
+                operation="mark_evidence_gap",
+                issue_id=request.issue_id,
+                reason=(
+                    "定向检索未召回可引用条文，只能收窄结论并披露证据缺口："
+                    f"{request.reason}"
+                ),
+            )
+        )
+    return gated[:5]
+
+
 def build_critic_messages(
     *,
     result: ReviewResult,
@@ -272,7 +383,10 @@ def build_critic_messages(
         "result": {
             "risk_level": result.risk_level,
             "conclusion": result.conclusion,
-            "claims": [claim.model_dump() for claim in result.claims],
+            "claims": [
+                {"claim_index": index, **claim.model_dump()}
+                for index, claim in enumerate(result.claims)
+            ],
             "missing_information": result.missing_information,
             "risk_boundaries": result.risk_boundaries,
         },
@@ -288,12 +402,19 @@ def build_critic_messages(
         ],
     }
     example = {
-        "decision": "approve",
-        "unsupported_claims": [],
+        "decision": "revise",
+        "unsupported_claims": ["缺少直接依据的确定性结论"],
         "missing_issue_ids": [],
         "revision_instructions": [],
+        "revision_actions": [
+            {
+                "operation": "narrow_claim",
+                "reason": "现有证据只支持条件性判断",
+                "claim_index": 0,
+            }
+        ],
         "targeted_retrieval_requests": [],
-        "reason": "所有高优先级问题均有证据支持",
+        "reason": "删除或收窄无依据结论",
     }
     return [
         ChatMessage(
@@ -302,14 +423,16 @@ def build_critic_messages(
                 "你是企业数据合规审查的 Evidence Critic。只检查结论是否超出证据、"
                 "高优先级 issue 是否遗漏、风险等级是否与证据冲突。若缺少可补齐的关键证据，"
                 "可给出最多三个 targeted_retrieval_requests；不要要求文风修改。"
+                "修订必须使用 revision_actions 的受控操作；不得要求引用 payload 中不存在的法规。"
             ),
         ),
         ChatMessage(
             role="user",
             content=(
-                "请输出严格 JSON。revision_instructions 必须具体且最多三条；"
+                "请输出严格 JSON。revision_instructions 是兼容字段，保持为空；"
                 "approve 时 revision_instructions 和 targeted_retrieval_requests 必须为空；"
-                "定向查询必须短、具体并指向缺失的法律依据。"
+                "approve 时 revision_actions 也必须为空。需要补证据但当前没有直接依据时，"
+                "使用 mark_evidence_gap 或 narrow_claim；定向查询必须短、具体。"
                 f"\njson_example={json.dumps(example, ensure_ascii=False)}"
                 f"\npayload={json.dumps(payload, ensure_ascii=False)}"
             ),

@@ -6,6 +6,7 @@ from law_agent.review.agents import (
     build_issue_plan,
     run_case_analyst,
     run_evidence_critic,
+    gate_revision_actions,
     select_issue_aware_hits,
     should_run_evidence_critic,
 )
@@ -142,6 +143,79 @@ def test_dossiers_can_use_issue_specific_candidate_pools() -> None:
     assert dossiers[0].evidence_chunk_ids == ["precise"]
 
 
+def test_revision_gate_converts_unavailable_addition_to_evidence_gap() -> None:
+    decision = CritiqueDecision(
+        decision="revise",
+        revision_actions=[
+            {
+                "operation": "add_supported_claim",
+                "issue_id": "issue_1",
+                "reason": "补充测绘法直接依据",
+                "replacement_text": "该活动构成测绘活动。",
+                "supporting_chunk_ids": ["not_retrieved"],
+            }
+        ],
+        targeted_retrieval_requests=[
+            {
+                "issue_id": "issue_1",
+                "query": "测绘法 测绘活动 定义",
+                "reason": "缺少直接依据",
+            }
+        ],
+        reason="需要补证据",
+    )
+    auxiliary = _hit().model_copy(
+        update={
+            "can_cite_clause": True,
+            "citation_role": "primary_legal_basis",
+            "title": "个人信息保护法",
+            "text": "个人信息处理者应当履行个人信息保护义务。",
+        }
+    )
+
+    actions = gate_revision_actions(
+        decision,
+        issue_hits_by_issue={"issue_1": [auxiliary]},
+        targeted_hits_by_issue={"issue_1": [auxiliary]},
+    )
+
+    assert [action.operation for action in actions] == ["mark_evidence_gap"]
+    assert "未召回" in actions[0].reason
+
+
+def test_revision_gate_rejects_irrelevant_citable_hit_for_external_law() -> None:
+    decision = CritiqueDecision(
+        decision="revise",
+        revision_instructions=["明确语料范围并收窄结论"],
+        targeted_retrieval_requests=[
+            {
+                "issue_id": "issue_1",
+                "query": "EU AI Act high-risk system obligations",
+                "reason": "需要欧盟法直接依据",
+            }
+        ],
+        reason="当前证据不覆盖欧盟法",
+    )
+    chinese_law = _hit().model_copy(
+        update={
+            "title": "个人信息保护法",
+            "text": "个人信息处理者应当履行保护义务。",
+            "can_cite_clause": True,
+        }
+    )
+
+    actions = gate_revision_actions(
+        decision,
+        issue_hits_by_issue={"issue_1": [chinese_law]},
+        targeted_hits_by_issue={"issue_1": [chinese_law]},
+    )
+
+    assert [action.operation for action in actions] == [
+        "narrow_claim",
+        "mark_evidence_gap",
+    ]
+
+
 def test_critic_only_runs_for_risk_or_evidence_signals() -> None:
     plan = build_issue_plan(
         [RetrievalQuery(query_id="q_1", query_type="legal_issue", text="一般问题")]
@@ -188,6 +262,13 @@ def test_evidence_critic_returns_strict_revision_decision() -> None:
             "unsupported_claims": ["缺少依据的结论"],
             "missing_issue_ids": ["issue_1"],
             "revision_instructions": ["删除无依据结论并覆盖 issue_1"],
+            "revision_actions": [
+                {
+                    "operation": "narrow_claim",
+                    "claim_index": 0,
+                    "reason": "关键问题证据不足",
+                }
+            ],
             "targeted_retrieval_requests": [
                 {
                     "issue_id": "issue_1",
@@ -225,6 +306,13 @@ def test_evidence_critic_returns_strict_revision_decision() -> None:
         unsupported_claims=["缺少依据的结论"],
         missing_issue_ids=["issue_1"],
         revision_instructions=["删除无依据结论并覆盖 issue_1"],
+        revision_actions=[
+            {
+                "operation": "narrow_claim",
+                "claim_index": 0,
+                "reason": "关键问题证据不足",
+            }
+        ],
         targeted_retrieval_requests=[
             {
                 "issue_id": "issue_1",

@@ -696,9 +696,11 @@ def test_run_hybrid_retrieval_returns_all_components(tmp_path: Path) -> None:
     assert trace.metadata_boosts  # boost summary recorded
 
 
+@pytest.mark.parametrize("failure_stage", ["none", "initial", "revision"])
 def test_multi_agent_runs_one_critic_revision_and_records_steps(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
 ) -> None:
     from law_agent.review.schemas import (
         CaseAnalysis,
@@ -710,6 +712,7 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
         RetrievalQuery,
     )
     from law_agent.review.service import create_review_case, run_hybrid_retrieval
+    from law_agent.review.llm import ReviewWorkflowFailed
 
     chunks_path = _write_fixture_corpus(tmp_path)
     response = create_review_case(
@@ -756,6 +759,13 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
 
     def fake_build_result(**kwargs):
         revision_inputs.append(kwargs.get("critique_instructions"))
+        if failure_stage == "initial":
+            raise ReviewWorkflowFailed(
+                failed_node="result_generation",
+                reason="claim_grounding_validation_failed",
+                message="revision failed",
+                attempts=1,
+            )
         return ReviewResult(
             review_result_id="result_test",
             review_case_id="review_test",
@@ -765,9 +775,24 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
             review_facts=response.review_case.review_facts,
         )
 
+    def fake_revise_result(**kwargs):
+        revision_inputs.append([action.reason for action in kwargs["actions"]])
+        if failure_stage == "revision":
+            raise ReviewWorkflowFailed(
+                failed_node="compliance_revision",
+                reason="revision_patch_validation_failed",
+                message="revision failed",
+                attempts=1,
+            )
+        return kwargs["result"]
+
     monkeypatch.setattr(
         "law_agent.review.service.build_review_result_with_deepseek",
         fake_build_result,
+    )
+    monkeypatch.setattr(
+        "law_agent.review.service.revise_review_result_with_deepseek",
+        fake_revise_result,
     )
     monkeypatch.setattr(
         "law_agent.review.service.run_evidence_critic",
@@ -803,6 +828,10 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
         step for step in trace.agent_steps if step.agent_name == "evidence_researcher"
     )
     assert researcher_step.llm_calls == 0
+    reviewer_step = next(
+        step for step in trace.agent_steps if step.agent_name == "compliance_reviewer"
+    )
+    assert reviewer_step.status == ("failed" if failure_stage == "initial" else "completed")
     assert any(query.text == analyst_query.text for query in trace.queries)
     assert any(
         query.text == "个人信息保护法 第三十九条 境外提供"
@@ -816,6 +845,10 @@ def test_multi_agent_runs_one_critic_revision_and_records_steps(
         "targeted_researcher",
         "compliance_revision",
     ]
+    revision_step = trace.agent_steps[-1]
+    assert revision_step.status == (
+        "failed" if failure_stage == "revision" else "completed"
+    )
 
 
 def test_run_hybrid_retrieval_uses_wide_candidate_pool_before_final_top_k(

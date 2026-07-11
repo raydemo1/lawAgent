@@ -49,7 +49,7 @@ _Avoid_: 直接向量化, 手工整理干净文本
 _Avoid_: 只展示最终 chunk, 不可解释清洗
 
 **Agentic Workflow**:
-采用确定性 Supervisor 的在线审查形态，用显式工作流节点完成事实抽取、问题规划、混合检索、证据自检、二次召回、结果审查、引用校验和拒答。复杂场景可以启用有界 Multi-Agent：Case Analyst 和 Evidence Researcher 复用既有事实/查询/检索结果，Compliance Reviewer 生成结果，Evidence Critic 只在高风险或复杂场景检查证据越界并最多要求一次修订；不允许多个自治 Agent 自由对话。
+采用确定性 Supervisor 的在线审查形态，用显式工作流节点完成事实抽取、问题规划、混合检索、证据自检、二次召回、结果审查、引用校验和拒答。复杂场景可以启用有界 Multi-Agent：Case Analyst 生成议题和受控研究查询，Evidence Researchers 按议题融合证据，Compliance Reviewer 生成初始结果，Evidence Critic 只在高风险、证据不足或已补检索场景输出结构化修订动作；最多一次定向补检索和一次局部 patch 修订，不允许多个自治 Agent 自由对话。
 _Avoid_: 无限 Agent 对话, 角色扮演式协作, 黑盒工具调用, 无终止条件的反思循环
 
 **LLM-owned Review Workflow**:

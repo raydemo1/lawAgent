@@ -2,22 +2,22 @@
 
 [![CI](https://github.com/raydemo1/lawAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/raydemo1/lawAgent/actions/workflows/ci.yml)
 
-LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 Case Analyst、Evidence Researcher、Compliance Reviewer 和条件式 Evidence Critic 协作，Critic 最多触发一次修订。
+LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 LLM Case Analyst、按议题 Evidence Researchers、Compliance Reviewer 和条件式 Evidence Critic 协作；Critic 最多触发一次定向补检索和一次证据约束的局部 patch 修订，检索不可满足的法规要求会降级为 evidence gap，而不是交给模型猜测。
 
-项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[两阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
+项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[三阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡与失败归因；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
 
 ## Full evaluation result
 
-| Metric | Single workflow | Multi-Agent |
-|---|---:|---:|
-| Recall@5 | 0.8059 | 0.8364 |
-| MRR@10 | 0.8618 | 0.8618 |
-| Abstention accuracy | 0.9756 | 0.9878 |
-| Citation violations | 0 | 0 |
-| Mean total latency | 57.00 s | 65.89 s |
-| Total LLM calls | 164 | 214 |
+| Metric | Single workflow | Bounded Multi-Agent | Deep Multi-Agent* |
+|---|---:|---:|---:|
+| Recall@5 | 0.8059 | 0.8364 | 0.8496 |
+| MRR@10 | 0.8618 | 0.8618 | 0.8679 |
+| Abstention accuracy | 0.9756 | 0.9878 | 1.0000 |
+| Citation violations | 0 | 0 | 0 |
+| Mean total latency | 57.00 s | 65.89 s | 92.96 s |
+| Total LLM calls | 164 | 214 | 313 |
 
-两轮均使用相同 82 case、冻结 facts/query、真实 service 检索、DeepSeek Flash、rerank off 和 8 workers。详细解释与限制见[实验对比报告](docs/evaluation/phase-comparison.md)。
+三阶段均使用相同 82 case、冻结 facts/query、真实 service 检索、DeepSeek Flash、rerank off 和 8 workers。`*` 深版数字由原 full 的 77 个成功结果与修复 fallback 后的 5 个失败案例重放合并，原始未修复 full 结果也完整保留。详细口径见[实验对比报告](docs/evaluation/phase-comparison.md)。
 
 ## 开发命令
 

@@ -20,7 +20,7 @@ import json
 import re
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from law_agent.config import require_llm_config
 from law_agent.data.schemas import Chunk
@@ -35,6 +35,8 @@ from law_agent.review.schemas import (
     GroundedClaim,
     ReviewFacts,
     ReviewResult,
+    ReviewResultPatch,
+    RevisionAction,
     RetrievalHit,
     RetrievalQuery,
     RiskLevel,
@@ -55,11 +57,17 @@ class LLMReviewResultDraft(StrictModel):
 
     risk_level: RiskLevel
     conclusion: str
-    claims: list[GroundedClaim] = Field(min_length=1)
+    claims: list[GroundedClaim] = Field(default_factory=list)
     trigger_reasons: list[str]
     missing_information: list[str]
     recommended_actions: list[str]
     risk_boundaries: list[str]
+
+    @model_validator(mode="after")
+    def claims_required_unless_abstaining(self) -> "LLMReviewResultDraft":
+        if self.risk_level != "insufficient_evidence" and not self.claims:
+            raise ValueError("non-abstention result requires grounded claims")
+        return self
 
 
 class MarkdownReviewDraft(StrictModel):
@@ -76,8 +84,14 @@ class MarkdownReviewDraft(StrictModel):
 
     risk_level: RiskLevel
     report: str
-    claims: list[GroundedClaim] = Field(min_length=1)
+    claims: list[GroundedClaim] = Field(default_factory=list)
     trigger_reasons: list[str]
+
+    @model_validator(mode="after")
+    def claims_required_unless_abstaining(self) -> "MarkdownReviewDraft":
+        if self.risk_level != "insufficient_evidence" and not self.claims:
+            raise ValueError("non-abstention report requires grounded claims")
+        return self
 
 
 def _has_high_risk_triggers(facts: ReviewFacts) -> bool:
@@ -1075,4 +1089,257 @@ def build_review_result_with_deepseek(
         claims=claims,
         citations=all_citations,
         applicable_evidence=citation_groups,
+    )
+
+
+def build_revision_patch_messages(
+    *,
+    result: ReviewResult,
+    actions: list[RevisionAction],
+    evidence_hits: list[RetrievalHit],
+) -> list[ChatMessage]:
+    """Build a minimal-delta revision prompt with an explicit evidence inventory."""
+
+    citable_hits = [hit for hit in evidence_hits if hit.can_cite_clause]
+    payload = {
+        "original_result": result.model_dump(
+            exclude={"citations", "applicable_evidence"}
+        ),
+        "revision_actions": [action.model_dump() for action in actions],
+        "allowed_citable_evidence": [
+            {
+                "chunk_id": hit.chunk_id,
+                "title": hit.title,
+                "text": hit.text[:1000],
+                "citation_role": hit.citation_role,
+            }
+            for hit in citable_hits
+        ],
+        "allowed_supporting_chunk_ids": [hit.chunk_id for hit in citable_hits],
+        "instructions": [
+            "只输出对 original_result 的最小 patch，不重新生成整份结果。",
+            "remove_claim/narrow_claim 必须删除或收窄无依据结论。",
+            "mark_evidence_gap 必须写入 missing_information 或 risk_boundaries。",
+            "只有 add_supported_claim 才可新增 claim，且 chunk_id 必须来自白名单。",
+            "不得引入 allowed_citable_evidence 中没有的新法规、条款或制度名称。",
+            "无法完成的修订应收窄结论或披露缺口，不能猜测依据。",
+            "若 risk_level 改为 insufficient_evidence，remove_claim_indexes 应覆盖全部原 claims，且不得新增 claims。",
+        ],
+    }
+    example = {
+        "risk_level": "medium",
+        "conclusion": "当前证据不足以作确定认定，需补充直接法律依据。",
+        "remove_claim_indexes": [0],
+        "replace_claims": [],
+        "add_claims": [],
+        "append_missing_information": ["缺少直接法律依据"],
+        "append_recommended_actions": [],
+        "append_risk_boundaries": ["不得将辅助材料作为法条依据"],
+    }
+    return [
+        ChatMessage(
+            role="system",
+            content=(
+                "你是 Evidence-Constrained Revision Agent。只做局部修订；"
+                "证据不足时删除、收窄或标记缺口，绝不补写语料中不存在的法规。"
+            ),
+        ),
+        ChatMessage(
+            role="user",
+            content=(
+                "输出严格 JSON。"
+                f"\njson_example={json.dumps(example, ensure_ascii=False)}"
+                f"\npayload={json.dumps(payload, ensure_ascii=False)}"
+            ),
+        ),
+    ]
+
+
+def _validate_revision_patch(
+    patch: ReviewResultPatch,
+    *,
+    result: ReviewResult,
+    actions: list[RevisionAction],
+    evidence_hits: list[RetrievalHit],
+) -> ReviewResultPatch:
+    claim_count = len(result.claims)
+    indexes = list(patch.remove_claim_indexes) + [
+        replacement.claim_index for replacement in patch.replace_claims
+    ]
+    if any(index >= claim_count for index in indexes):
+        raise ValueError("revision patch references an unknown claim index")
+    if len(indexes) != len(set(indexes)):
+        raise ValueError("revision patch modifies the same claim more than once")
+
+    operations = {action.operation for action in actions}
+    if patch.add_claims and "add_supported_claim" not in operations:
+        raise ValueError("revision patch cannot add claims without an add action")
+    if patch.replace_claims and not operations.intersection(
+        {"narrow_claim", "add_supported_claim"}
+    ):
+        raise ValueError("revision patch cannot replace claims for these actions")
+    if patch.remove_claim_indexes and not operations.intersection(
+        {"remove_claim", "narrow_claim", "mark_evidence_gap", "abstain"}
+    ):
+        raise ValueError("revision patch cannot remove claims for these actions")
+    if (
+        patch.risk_level is not None
+        and patch.risk_level != result.risk_level
+        and not operations.intersection(
+            {"narrow_claim", "mark_evidence_gap", "change_risk_boundary", "abstain"}
+        )
+    ):
+        raise ValueError("revision patch cannot change risk for these actions")
+
+    allowed_ids = {hit.chunk_id for hit in evidence_hits if hit.can_cite_clause}
+    proposed_claims = [
+        replacement.claim for replacement in patch.replace_claims
+    ] + list(patch.add_claims)
+    for claim in proposed_claims:
+        if not claim.supporting_chunk_ids or not set(
+            claim.supporting_chunk_ids
+        ).issubset(allowed_ids):
+            raise ValueError("revision patch claim uses unavailable legal evidence")
+
+    requires_conclusion_change = any(
+        action.operation
+        in {"remove_claim", "narrow_claim", "mark_evidence_gap", "abstain"}
+        for action in actions
+    )
+    if requires_conclusion_change and not patch.conclusion:
+        raise ValueError("revision actions require a narrowed conclusion")
+
+    proposed_text = "\n".join(
+        [patch.conclusion or ""] + [claim.text for claim in proposed_claims]
+    )
+    original_titles = set(re.findall(r"《([^》]+)》", result.conclusion))
+    allowed_text = "\n".join(hit.title + "\n" + hit.text for hit in evidence_hits)
+    introduced_titles = set(re.findall(r"《([^》]+)》", proposed_text)) - original_titles
+    unavailable_titles = [
+        title for title in introduced_titles if title not in allowed_text
+    ]
+    if unavailable_titles:
+        raise ValueError(
+            f"revision introduced unavailable legal sources: {unavailable_titles}"
+        )
+    return patch
+
+
+def apply_review_result_patch(
+    *,
+    result: ReviewResult,
+    patch: ReviewResultPatch,
+    evidence_hits: list[RetrievalHit],
+    chunks_by_id: dict[str, Chunk] | None = None,
+) -> ReviewResult:
+    """Apply a validated patch while preserving every untouched result field."""
+
+    replacements = {
+        replacement.claim_index: replacement.claim
+        for replacement in patch.replace_claims
+    }
+    removed = set(patch.remove_claim_indexes)
+    claims = [
+        replacements.get(index, claim)
+        for index, claim in enumerate(result.claims)
+        if index not in removed
+    ]
+    claims.extend(patch.add_claims)
+    risk_level = patch.risk_level or result.risk_level
+    if risk_level == "insufficient_evidence":
+        claims = []
+    elif claims:
+        claims = validate_grounded_claims(claims, evidence_hits)
+
+    conclusion = patch.conclusion or result.conclusion
+    if patch.conclusion and CONCLUSION_DISCLAIMER.strip() not in conclusion:
+        conclusion = conclusion.rstrip() + CONCLUSION_DISCLAIMER
+
+    def merged(existing: list[str], additions: list[str]) -> list[str]:
+        return list(dict.fromkeys([*existing, *additions]))
+
+    citation_groups, _violations = group_citations(
+        evidence_hits, result.review_facts, chunks_by_id
+    )
+    citations = [
+        citation for group in citation_groups for citation in group.citations
+    ]
+
+    return result.model_copy(
+        update={
+            "risk_level": risk_level,
+            "conclusion": conclusion,
+            "claims": claims,
+            "missing_information": merged(
+                result.missing_information, patch.append_missing_information
+            ),
+            "recommended_actions": merged(
+                result.recommended_actions, patch.append_recommended_actions
+            ),
+            "risk_boundaries": merged(
+                result.risk_boundaries, patch.append_risk_boundaries
+            ),
+            "citations": citations,
+            "applicable_evidence": citation_groups,
+        }
+    )
+
+
+def revise_review_result_with_deepseek(
+    *,
+    result: ReviewResult,
+    actions: list[RevisionAction],
+    evidence_hits: list[RetrievalHit],
+    chunks_by_id: dict[str, Chunk] | None = None,
+    client: OpenAICompatibleClient | None = None,
+    max_retries: int | None = None,
+) -> ReviewResult:
+    """Generate and apply one evidence-constrained delta to a valid result."""
+
+    if result.risk_level == "insufficient_evidence":
+        gaps = [
+            action.reason
+            for action in actions
+            if action.operation in {"mark_evidence_gap", "abstain", "narrow_claim"}
+        ]
+        return result.model_copy(
+            update={
+                "claims": [],
+                "missing_information": list(
+                    dict.fromkeys([*result.missing_information, *gaps])
+                ),
+                "risk_boundaries": list(
+                    dict.fromkeys([*result.risk_boundaries, *gaps])
+                ),
+            }
+        )
+
+    if client is None:
+        client = OpenAICompatibleClient(require_llm_config())
+    node = StructuredLLMNode(
+        node_name="compliance_revision",
+        output_model=ReviewResultPatch,
+        client=client,
+        max_retries=max_retries,
+        trace_id=result.trace_id,
+    )
+    patch = node.run(
+        build_revision_patch_messages(
+            result=result,
+            actions=actions,
+            evidence_hits=evidence_hits,
+        ),
+        post_validate=lambda candidate: _validate_revision_patch(
+            candidate,
+            result=result,
+            actions=actions,
+            evidence_hits=evidence_hits,
+        ),
+        post_validation_reason="revision_patch_validation_failed",
+    )
+    return apply_review_result_patch(
+        result=result,
+        patch=patch,
+        evidence_hits=evidence_hits,
+        chunks_by_id=chunks_by_id,
     )

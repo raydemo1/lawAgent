@@ -10,14 +10,17 @@ flowchart LR
     API --> WF["Deterministic Supervisor"]
 
     subgraph Review["Multi-Agent review module"]
-        WF --> CA["Case Analyst<br/>facts + IssuePlan"]
-        CA --> ER["Evidence Researcher<br/>typed queries + dossiers"]
+        WF --> CA["Case Analyst<br/>issues + research queries"]
+        CA --> ER["Issue Evidence Researchers<br/>per-issue fusion + dossiers"]
         ER --> RV["Compliance Reviewer<br/>structured result + claims"]
         RV --> CR{"Evidence Critic needed?"}
         CR -->|"no"| CG["Citation Gate"]
         CR -->|"yes"| EC["Evidence Critic"]
         EC -->|"approve"| CG
-        EC -->|"revise once"| RR["Compliance Revision"]
+        EC -->|"missing evidence"| TR["Targeted Research<br/>one batch only"]
+        TR --> FG["Evidence Feasibility Gate"]
+        FG --> RR["Patch Revision<br/>minimal delta"]
+        EC -->|"revise once"| RR
         RR --> CG
     end
 
@@ -41,11 +44,16 @@ stateDiagram-v2
     EvidenceCheck --> SupplementalRetrieval: evidence gap
     EvidenceCheck --> Review: sufficient
     SupplementalRetrieval --> Review: one pass only
-    Review --> Critic: high risk, complex, retried, or insufficient
+    Review --> Critic: high risk, retried, or insufficient
     Review --> CitationGate: simple low-risk case
     Critic --> CitationGate: approve
-    Critic --> Revision: revise
+    Critic --> TargetedRetrieval: evidence gap
+    TargetedRetrieval --> FeasibilityGate: one batch only
+    FeasibilityGate --> Revision: relevant citable evidence exists
+    FeasibilityGate --> Revision: unavailable request becomes evidence gap
+    Critic --> Revision: revise without retrieval
     Revision --> CitationGate: one revision only
+    Revision --> CitationGate: validation fails; keep original
     CitationGate --> [*]
 ```
 
@@ -57,9 +65,12 @@ The Supervisor owns ordering and termination. LLM nodes cannot create an unbound
 |---|---|---|
 | Review workflow | `ReviewCase -> ReviewResult` | Agent ordering, retry, one-pass revision, persistence |
 | Retrieval | typed queries -> `RetrievalHit[]` | ES/pgvector adapters, RRF, boosts, source diversity, neighbors |
-| Case Analyst | queries -> `IssuePlan` | deterministic issue grouping; no extra LLM call |
-| Evidence Researcher | plan + hits -> dossiers | issue-level evidence mapping and gap detection |
-| Evidence Critic | result + dossiers -> decision | Flash LLM with strict schema and bounded retry |
+| Case Analyst | case + frozen queries -> `CaseAnalysis` | Flash-generated issues and bounded issue-specific queries |
+| Evidence Researcher | plan + per-query hits -> dossiers | per-issue fusion, three global anchors, issue/source allocation |
+| Evidence Critic | result + dossiers -> typed actions | remove, narrow, supported add, evidence gap, boundary, or abstain |
+| Revision gate | actions + targeted hits -> feasible actions | rejects irrelevant citable hits and downgrades impossible additions to gaps |
+| Compliance Revision | validated result + feasible actions -> patch | minimal delta; cannot introduce unavailable titled legal sources |
+| Result resilience | validated result or deterministic fallback | initial generation fallback; failed revision preserves original |
 | Citation governance | claims + evidence -> governed claims | anti-hallucination whitelist and clause eligibility |
 
-LangGraph is intentionally not a runtime dependency. The current workflow does not require checkpoint recovery, human interruption, or complex nested graphs; the deterministic Supervisor provides a smaller interface and keeps behavior directly testable.
+For `insufficient_evidence`, revision is deterministic: claims remain empty and evidence gaps are appended without another LLM call. LangGraph is intentionally not a runtime dependency. The current workflow does not require checkpoint recovery, human interruption, or complex nested graphs; the deterministic Supervisor provides a smaller interface and keeps behavior directly testable.

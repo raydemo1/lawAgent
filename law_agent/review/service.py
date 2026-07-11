@@ -17,6 +17,7 @@ from law_agent.review.evidence import (
 from law_agent.review.agents import (
     build_evidence_dossiers,
     build_issue_plan,
+    gate_revision_actions,
     run_case_analyst,
     run_evidence_critic,
     select_issue_aware_hits,
@@ -28,6 +29,7 @@ from law_agent.review.facts import (
     extract_facts_with_deepseek,
 )
 from law_agent.review.ids import make_id, utc_now_iso
+from law_agent.review.llm import ReviewWorkflowFailed
 from law_agent.review.io import (
     read_retrieval_traces,
     review_cases_path,
@@ -43,7 +45,11 @@ from law_agent.review.query_planner import (
     plan_queries,
     plan_queries_with_deepseek,
 )
-from law_agent.review.result_builder import build_review_result, build_review_result_with_deepseek
+from law_agent.review.result_builder import (
+    build_review_result,
+    build_review_result_with_deepseek,
+    revise_review_result_with_deepseek,
+)
 from law_agent.review.retrieval.boosts import (
     apply_boosts_to_hits,
     compute_boosts_summary,
@@ -773,30 +779,56 @@ def run_hybrid_retrieval(
     if review_mode in ("llm", "multi_agent"):
         reviewer_started = time.perf_counter()
         reviewer_calls_before = current_telemetry().llm_call_count
-        review_result = build_review_result_with_deepseek(
-            review_result_id=case.latest_result_id or make_id("result"),
-            review_case_id=case_id,
-            trace_id=target_trace.trace_id,
-            facts=facts,
-            self_check=self_check,
-            evidence_hits=result_evidence,
-            chunks_by_id=chunks_by_id,
-            question=case.question,
-            material_text=case.material.material_text,
-            retrieval_queries=updated_trace.queries,
-            second_retrieval=updated_trace.second_retrieval,
-            source_evidence_packets=source_evidence_packets,
-            output_format=output_format,
-        )
-        if multi_agent:
+        try:
+            review_result = build_review_result_with_deepseek(
+                review_result_id=case.latest_result_id or make_id("result"),
+                review_case_id=case_id,
+                trace_id=target_trace.trace_id,
+                facts=facts,
+                self_check=self_check,
+                evidence_hits=result_evidence,
+                chunks_by_id=chunks_by_id,
+                question=case.question,
+                material_text=case.material.material_text,
+                retrieval_queries=updated_trace.queries,
+                second_retrieval=updated_trace.second_retrieval,
+                source_evidence_packets=source_evidence_packets,
+                output_format=output_format,
+            )
+        except ReviewWorkflowFailed as exc:
+            if not multi_agent:
+                raise
+            review_result = build_review_result(
+                review_result_id=case.latest_result_id or make_id("result"),
+                review_case_id=case_id,
+                trace_id=target_trace.trace_id,
+                facts=facts,
+                self_check=self_check,
+                evidence_hits=result_evidence,
+                chunks_by_id=chunks_by_id,
+            )
             agent_steps.append(
                 AgentStep(
                     agent_name="compliance_reviewer",
-                    status="completed",
+                    status="failed",
+                    decision=f"deterministic fallback: {exc.reason}",
                     latency_ms=int((time.perf_counter() - reviewer_started) * 1000),
                     llm_calls=current_telemetry().llm_call_count - reviewer_calls_before,
                 )
             )
+        if multi_agent:
+            if not any(
+                step.agent_name == "compliance_reviewer" for step in agent_steps
+            ):
+                agent_steps.append(
+                    AgentStep(
+                        agent_name="compliance_reviewer",
+                        status="completed",
+                        latency_ms=int((time.perf_counter() - reviewer_started) * 1000),
+                        llm_calls=current_telemetry().llm_call_count
+                        - reviewer_calls_before,
+                    )
+                )
     else:
         review_result = build_review_result(
             review_result_id=case.latest_result_id or make_id("result"),
@@ -829,6 +861,7 @@ def run_hybrid_retrieval(
                 )
             )
             targeted_requests = critique_decision.targeted_retrieval_requests
+            targeted_hits_by_issue: dict[str, list[RetrievalHit]] = {}
             if targeted_requests:
                 targeted_started = time.perf_counter()
                 next_query_number = len(updated_trace.queries) + 1
@@ -870,6 +903,11 @@ def run_hybrid_retrieval(
                         apply_boosts_to_hits(targeted_kw[index], chunks_by_id, facts),
                         apply_boosts_to_hits(targeted_vec[index], chunks_by_id, facts),
                         top_k=candidate_top_k,
+                    )
+                    targeted_hits_by_issue[request.issue_id] = source_aware_fuse(
+                        issue_candidates,
+                        top_k=candidate_top_k,
+                        chunks_by_id=chunks_by_id,
                     )
                     combined_issue = issue_hits_by_issue.get(request.issue_id, []) + issue_candidates
                     issue_hits_by_issue[request.issue_id] = source_aware_fuse(
@@ -928,33 +966,46 @@ def run_hybrid_retrieval(
                     )
                 )
             if critique_decision.decision == "revise":
+                revision_actions = gate_revision_actions(
+                    critique_decision,
+                    issue_hits_by_issue=issue_hits_by_issue,
+                    targeted_hits_by_issue=targeted_hits_by_issue,
+                )
                 revision_started = time.perf_counter()
                 revision_calls_before = current_telemetry().llm_call_count
-                review_result = build_review_result_with_deepseek(
-                    review_result_id=case.latest_result_id or make_id("result"),
-                    review_case_id=case_id,
-                    trace_id=target_trace.trace_id,
-                    facts=facts,
-                    self_check=self_check,
-                    evidence_hits=result_evidence,
-                    chunks_by_id=chunks_by_id,
-                    question=case.question,
-                    material_text=case.material.material_text,
-                    retrieval_queries=updated_trace.queries,
-                    second_retrieval=updated_trace.second_retrieval,
-                    source_evidence_packets=source_evidence_packets,
-                    output_format=output_format,
-                    critique_instructions=critique_decision.revision_instructions,
-                )
-                agent_steps.append(
-                    AgentStep(
-                        agent_name="compliance_revision",
-                        status="completed",
-                        decision="revised once",
-                        latency_ms=int((time.perf_counter() - revision_started) * 1000),
-                        llm_calls=current_telemetry().llm_call_count - revision_calls_before,
+                try:
+                    review_result = revise_review_result_with_deepseek(
+                        result=review_result,
+                        actions=revision_actions,
+                        evidence_hits=result_evidence,
+                        chunks_by_id=chunks_by_id,
                     )
-                )
+                except ReviewWorkflowFailed as exc:
+                    agent_steps.append(
+                        AgentStep(
+                            agent_name="compliance_revision",
+                            status="failed",
+                            decision=f"kept original result: {exc.reason}",
+                            latency_ms=int(
+                                (time.perf_counter() - revision_started) * 1000
+                            ),
+                            llm_calls=current_telemetry().llm_call_count
+                            - revision_calls_before,
+                        )
+                    )
+                else:
+                    agent_steps.append(
+                        AgentStep(
+                            agent_name="compliance_revision",
+                            status="completed",
+                            decision="revised once",
+                            latency_ms=int(
+                                (time.perf_counter() - revision_started) * 1000
+                            ),
+                            llm_calls=current_telemetry().llm_call_count
+                            - revision_calls_before,
+                        )
+                    )
         else:
             agent_steps.append(
                 AgentStep(

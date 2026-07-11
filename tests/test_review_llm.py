@@ -21,8 +21,9 @@ from law_agent.review.query_planner import (
 from law_agent.review.result_builder import (
     build_result_generation_messages,
     build_review_result_with_deepseek,
+    revise_review_result_with_deepseek,
 )
-from law_agent.review.schemas import ReviewFacts
+from law_agent.review.schemas import ReviewFacts, ReviewResult, RevisionAction
 from law_agent.review.schemas import EvidenceSelfCheck
 from law_agent.review.schemas import SourceEvidencePacket
 from law_agent.review.telemetry import current_telemetry, reset_telemetry
@@ -542,3 +543,220 @@ def test_result_generation_allows_empty_claim_rail_without_citable_evidence() ->
     assert result.claims == []
     assert result.applicable_evidence
     assert result.applicable_evidence[0].usage == "implementation_reference"
+
+
+def test_insufficient_evidence_allows_empty_claims_with_irrelevant_citable_hits() -> None:
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "insufficient_evidence",
+                "conclusion": "当前语料不覆盖 EU AI Act。",
+                "claims": [],
+                "trigger_reasons": ["out_of_corpus"],
+                "missing_information": [],
+                "recommended_actions": ["咨询欧盟法律专业人士"],
+                "risk_boundaries": ["仅覆盖中国大陆数据合规语料"],
+            }
+        ]
+    )
+
+    result = build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert result.risk_level == "insufficient_evidence"
+    assert result.claims == []
+
+
+def test_revision_applies_bounded_patch_without_regenerating_other_fields() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="high",
+        conclusion="该活动确定构成测绘活动。",
+        review_facts=ReviewFacts(industry="汽车"),
+        claims=[
+            {
+                "text": "该活动确定构成测绘活动。",
+                "supporting_chunk_ids": ["c1"],
+            }
+        ],
+        trigger_reasons=["automotive"],
+        recommended_actions=["完成内部评估"],
+    )
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "medium",
+                "conclusion": "该活动可能涉及测绘监管，需补充直接法律依据后判断。",
+                "remove_claim_indexes": [0],
+                "replace_claims": [],
+                "add_claims": [],
+                "append_missing_information": ["测绘活动认定的直接法律依据"],
+                "append_recommended_actions": [],
+                "append_risk_boundaries": ["当前证据不足以作确定认定"],
+            }
+        ]
+    )
+
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[
+            RevisionAction(
+                operation="mark_evidence_gap",
+                issue_id="issue_1",
+                reason="未召回可引用的测绘法条文",
+            )
+        ],
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert result.risk_level == "medium"
+    assert result.claims == []
+    assert result.trigger_reasons == ["automotive"]
+    assert result.recommended_actions == ["完成内部评估"]
+    assert "测绘活动认定" in result.missing_information[0]
+
+
+def test_revision_rejects_legal_source_absent_from_evidence() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="high",
+        conclusion="当前场景存在较高行业合规风险。",
+        review_facts=ReviewFacts(industry="汽车"),
+        claims=[
+            {
+                "text": "当前场景存在较高行业合规风险。",
+                "supporting_chunk_ids": ["c1"],
+            }
+        ],
+    )
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": "high",
+                "conclusion": "依据《测绘法》，该活动确定构成测绘活动。",
+                "remove_claim_indexes": [0],
+                "replace_claims": [],
+                "add_claims": [],
+                "append_missing_information": [],
+                "append_recommended_actions": [],
+                "append_risk_boundaries": [],
+            }
+        ]
+    )
+
+    with pytest.raises(ReviewWorkflowFailed) as exc_info:
+        revise_review_result_with_deepseek(
+            result=original,
+            actions=[
+                RevisionAction(
+                    operation="narrow_claim",
+                    claim_index=0,
+                    reason="当前证据不足",
+                )
+            ],
+            evidence_hits=[_hit(title="个人信息保护法")],
+            client=client,  # type: ignore[arg-type]
+            max_retries=0,
+        )
+
+    assert exc_info.value.reason == "revision_patch_validation_failed"
+
+
+def test_out_of_corpus_revision_is_deterministic_and_does_not_call_llm() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="insufficient_evidence",
+        conclusion="当前中国大陆语料不覆盖 EU AI Act。",
+        review_facts=ReviewFacts(),
+        claims=[],
+        risk_boundaries=["仅覆盖中国大陆数据合规语料"],
+    )
+    client = FakeClient(outputs=[])
+
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[
+            RevisionAction(
+                operation="mark_evidence_gap",
+                issue_id="issue_1",
+                reason="语料未覆盖 EU AI Act，不能生成实体义务结论",
+            )
+        ],
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
+
+    assert result.risk_level == "insufficient_evidence"
+    assert result.claims == []
+    assert "语料未覆盖" in result.risk_boundaries[-1]
+    assert client.calls == []
+
+
+def test_revision_cannot_add_claim_without_critic_add_action() -> None:
+    original = ReviewResult(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        risk_level="medium",
+        conclusion="当前证据只支持条件性判断。",
+        review_facts=ReviewFacts(),
+        claims=[
+            {
+                "text": "当前证据只支持条件性判断。",
+                "supporting_chunk_ids": ["c1"],
+            }
+        ],
+    )
+    client = FakeClient(
+        outputs=[
+            {
+                "risk_level": None,
+                "conclusion": "当前证据仍只支持条件性判断。",
+                "remove_claim_indexes": [],
+                "replace_claims": [],
+                "add_claims": [
+                    {
+                        "text": "擅自新增的确定性结论。",
+                        "supporting_chunk_ids": ["c1"],
+                    }
+                ],
+                "append_missing_information": [],
+                "append_recommended_actions": [],
+                "append_risk_boundaries": [],
+            }
+        ]
+    )
+
+    with pytest.raises(ReviewWorkflowFailed) as exc_info:
+        revise_review_result_with_deepseek(
+            result=original,
+            actions=[
+                RevisionAction(
+                    operation="narrow_claim",
+                    claim_index=0,
+                    reason="只允许收窄",
+                )
+            ],
+            evidence_hits=[_hit()],
+            client=client,  # type: ignore[arg-type]
+            max_retries=0,
+        )
+
+    assert exc_info.value.reason == "revision_patch_validation_failed"

@@ -230,6 +230,47 @@ class TargetedRetrievalRequest(StrictModel):
         return value.strip()
 
 
+RevisionOperation = Literal[
+    "remove_claim",
+    "narrow_claim",
+    "add_supported_claim",
+    "mark_evidence_gap",
+    "change_risk_boundary",
+    "abstain",
+]
+
+
+class RevisionAction(StrictModel):
+    """One evidence-constrained operation requested by the Critic."""
+
+    operation: RevisionOperation
+    reason: str
+    issue_id: str | None = None
+    claim_index: int | None = Field(default=None, ge=0)
+    replacement_text: str | None = None
+    supporting_chunk_ids: list[str] = Field(default_factory=list)
+
+
+class ClaimReplacement(StrictModel):
+    """Replace one existing grounded claim without regenerating the result."""
+
+    claim_index: int = Field(ge=0)
+    claim: GroundedClaim
+
+
+class ReviewResultPatch(StrictModel):
+    """Bounded delta applied to an already validated ReviewResult."""
+
+    risk_level: RiskLevel | None = None
+    conclusion: str | None = None
+    remove_claim_indexes: list[int] = Field(default_factory=list)
+    replace_claims: list[ClaimReplacement] = Field(default_factory=list)
+    add_claims: list[GroundedClaim] = Field(default_factory=list)
+    append_missing_information: list[str] = Field(default_factory=list)
+    append_recommended_actions: list[str] = Field(default_factory=list)
+    append_risk_boundaries: list[str] = Field(default_factory=list)
+
+
 class CritiqueDecision(StrictModel):
     """Evidence critic decision; at most one revision is allowed."""
 
@@ -237,6 +278,7 @@ class CritiqueDecision(StrictModel):
     unsupported_claims: list[str] = Field(default_factory=list)
     missing_issue_ids: list[str] = Field(default_factory=list)
     revision_instructions: list[str] = Field(default_factory=list)
+    revision_actions: list[RevisionAction] = Field(default_factory=list, max_length=5)
     targeted_retrieval_requests: list[TargetedRetrievalRequest] = Field(
         default_factory=list, max_length=3
     )
@@ -244,10 +286,18 @@ class CritiqueDecision(StrictModel):
 
     @model_validator(mode="after")
     def revision_requires_instructions(self) -> "CritiqueDecision":
-        if self.decision == "revise" and not self.revision_instructions:
-            raise ValueError("revise decision requires revision_instructions")
+        if (
+            self.decision == "revise"
+            and not self.revision_instructions
+            and not self.revision_actions
+        ):
+            raise ValueError("revise decision requires revision actions")
         if self.decision == "approve" and self.targeted_retrieval_requests:
             raise ValueError("approve decision cannot request targeted retrieval")
+        if self.decision == "approve" and self.revision_actions:
+            raise ValueError("approve decision cannot request revision actions")
+        if self.decision == "approve" and self.revision_instructions:
+            raise ValueError("approve decision cannot request revision instructions")
         return self
 
 
