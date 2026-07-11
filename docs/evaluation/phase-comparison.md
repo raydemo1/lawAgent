@@ -58,3 +58,5 @@ Tracked reports:
 - [Phase 2 bounded Multi-Agent](phase2-multi-agent-full.md)
 - [Phase 3 raw full](phase3-deep-multi-agent-full.md)
 - [Phase 3 five-case failure replay](phase3-failed-case-replay.md)
+- [Phase 4 patch-revision full run](phase4-patch-revision-full.md)
+- [Phase 4 evaluation-system audit](phase4-evaluation-audit.md)

@@ -4,7 +4,7 @@
 
 LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 LLM Case Analyst、按议题 Evidence Researchers、Compliance Reviewer 和条件式 Evidence Critic 协作；Critic 最多触发一次定向补检索和一次证据约束的局部 patch 修订，检索不可满足的法规要求会降级为 evidence gap，而不是交给模型猜测。
 
-项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[三阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡与失败归因；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
+项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[三阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡与失败归因；[Phase 4 评测体系审查](docs/evaluation/phase4-evaluation-audit.md) 说明当前指标缺陷与真实上限判断；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
 
 ## Full evaluation result
 
