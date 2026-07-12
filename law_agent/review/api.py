@@ -719,6 +719,6 @@ def _now_iso() -> str:
 # Default app instance (for uvicorn import)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_EVAL_CACHE_DIR = Path("artifacts/review_runs")
+_DEFAULT_EVAL_CACHE_DIR = Path("data/review_runs")
 
 app = create_app(eval_cache_dir=_DEFAULT_EVAL_CACHE_DIR)

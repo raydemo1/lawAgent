@@ -99,13 +99,13 @@ npm run dev
 快速 smoke：
 
 ```powershell
-python -m law_agent.review eval --suite quick --retrieval-mode service --review-mode llm --max-workers 8 --output artifacts/review_runs/eval_quick_service.json --report artifacts/review_runs/eval_quick_service.md
+python -m law_agent.review eval --suite quick --retrieval-mode service --review-mode llm --max-workers 8 --output data/review_runs/eval_quick_service.json --report data/review_runs/eval_quick_service.md
 ```
 
 完整验证：
 
 ```powershell
-python -m law_agent.review eval --suite full --retrieval-mode service --review-mode multi_agent --max-workers 8 --output artifacts/review_runs/eval_full_service.json --report artifacts/review_runs/eval_full_service.md
+python -m law_agent.review eval --suite full --retrieval-mode service --review-mode multi_agent --max-workers 8 --output data/review_runs/eval_full_service.json --report data/review_runs/eval_full_service.md
 ```
 
 评测汇总会包含检索质量指标，以及 `mean_total_latency_ms`、`mean_retrieval_latency_ms`、`total_llm_calls`、`total_retries`。

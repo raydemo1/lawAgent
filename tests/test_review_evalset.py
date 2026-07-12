@@ -199,6 +199,7 @@ def test_evaluate_case_good_retrieval() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1", "s2"],
+        must_have_sources=["s1", "s2"],
         should_abstain=False,
     )
     hits = [_hit(source_id="s1", rank=0), _hit(source_id="s2", rank=1)]
@@ -217,6 +218,7 @@ def test_evaluate_case_low_recall_is_bad() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1", "s2"],
+        must_have_sources=["s1", "s2"],
         should_abstain=False,
     )
     hits = [_hit(source_id="s3", rank=0)]  # no expected sources
@@ -235,6 +237,7 @@ def test_evaluate_case_low_nonzero_recall_has_taxonomy() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1", "s2", "s3"],
+        must_have_sources=["s1", "s2", "s3"],
         min_recall_at_5=0.8,
     )
     hits = [_hit(source_id="s1", rank=0)]
@@ -251,6 +254,7 @@ def test_evaluate_case_records_candidate_and_source_diversity_metrics() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1", "s2"],
+        must_have_sources=["s1", "s2"],
     )
     hits = [
         _hit(source_id="s1", chunk_id="c1", rank=0),
@@ -272,6 +276,7 @@ def test_evaluate_case_candidate_missing_has_taxonomy() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1", "s2"],
+        must_have_sources=["s1", "s2"],
         min_recall_at_5=0.75,
     )
     hits = [_hit(source_id="s1", rank=0)]
@@ -304,6 +309,7 @@ def test_evaluate_case_abstention_incorrect() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1"],
+        must_have_sources=["s1"],
         should_abstain=False,
     )
     hits: list[RetrievalHit] = []
@@ -323,6 +329,7 @@ def test_evaluate_case_second_retrieval_recorded_as_fact() -> None:
         question="问题",
         material_text="材料",
         expected_sources=["s1"],
+        must_have_sources=["s1"],
     )
     hits = [_hit(source_id="s1")]
 
@@ -420,6 +427,7 @@ def test_run_evaluation_with_fixture_corpus(tmp_path) -> None:
             question="数据出境安全评估",
             material_text="手机号发送给新加坡服务商。",
             expected_sources=["src_001"],
+            must_have_sources=["src_001"],
             should_abstain=False,
         ),
         EvalScenario(

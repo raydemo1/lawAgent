@@ -1,7 +1,6 @@
 # Local preview / brainstorming sessions
 .superpowers/
 .agents/
-artifacts/
 .codex/
 /data/
 
@@ -31,17 +30,7 @@ dist/
 build/
 coverage/
 
-# Data and generated indexes
-data/raw/
-data/manifests/source_manifest.csv
-data/normalized/
-data/cleaned/
-data/enriched/
-data/chunks/
-data/processed/
-data/cache/
-data/eval/*.jsonl
-artifacts/
+# Generated indexes
 indexes/
 *.sqlite
 *.sqlite3

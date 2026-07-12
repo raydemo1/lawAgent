@@ -40,7 +40,7 @@ DEFAULT_REVIEW_MODE: ReviewEvalMode = "llm"
 DEFAULT_RERANK_MODE: RerankMode = "off"
 DEFAULT_EVAL_SUITE: EvalSuite = "full"
 DEFAULT_MAX_WORKERS = 4
-DEFAULT_EVAL_INPUTS_DIR = Path("artifacts/review_runs/eval_inputs")
+DEFAULT_EVAL_INPUTS_DIR = Path("data/review_runs/eval_inputs")
 
 
 @dataclass(frozen=True)

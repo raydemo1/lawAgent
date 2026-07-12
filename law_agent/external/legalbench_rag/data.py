@@ -15,8 +15,8 @@ from law_agent.external.legalbench_rag.schemas import (
     LegalBenchSnippet,
 )
 
-DEFAULT_DATA_DIR = Path("artifacts/external/legalbenchrag/data")
-DEFAULT_OUTPUT_DIR = Path("artifacts/external/legalbenchrag")
+DEFAULT_DATA_DIR = Path("data/external/legalbenchrag/data")
+DEFAULT_OUTPUT_DIR = Path("data/external/legalbenchrag")
 DEFAULT_CHUNKS_PATH = DEFAULT_OUTPUT_DIR / "chunks_fixed_1000_200.jsonl"
 DEFAULT_CHUNK_META_PATH = DEFAULT_OUTPUT_DIR / "chunks_fixed_1000_200.meta.jsonl"
 BENCHMARK_WEIGHTS: dict[str, float] = {

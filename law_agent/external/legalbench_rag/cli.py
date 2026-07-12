@@ -142,11 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_parser.add_argument(
         "--output",
-        default="artifacts/external/legalbenchrag/results_hybrid.json",
+        default="data/external/legalbenchrag/results_hybrid.json",
     )
     eval_parser.add_argument(
         "--report",
-        default="artifacts/external/legalbenchrag/report_hybrid.md",
+        default="data/external/legalbenchrag/report_hybrid.md",
     )
     eval_parser.set_defaults(func=_cmd_eval)
     return parser

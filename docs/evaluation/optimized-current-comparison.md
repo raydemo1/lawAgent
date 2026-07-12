@@ -83,9 +83,9 @@ not as proof that adding more agents always wins.
 
 ## Artifacts
 
-- `artifacts/review_runs/eval_manual_labels_llm_rerank_off_full.json`
-- `artifacts/review_runs/eval_manual_labels_llm_rerank_on_full.json`
-- `artifacts/review_runs/eval_manual_labels_multi_agent_full.json`
+- `data/review_runs/eval_manual_labels_llm_rerank_off_full.json`
+- `data/review_runs/eval_manual_labels_llm_rerank_on_full.json`
+- `data/review_runs/eval_manual_labels_multi_agent_full.json`
 
 Earlier phase reports remain historical records of workflow evolution and use
 their original metric definitions. They must not be compared directly with the
