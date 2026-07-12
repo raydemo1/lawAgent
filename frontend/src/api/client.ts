@@ -279,6 +279,8 @@ export async function submitReview(
   question: string,
   materialText: string,
   file?: File | null,
+  reviewMode?: 'llm' | 'multi_agent',
+  rerankMode?: 'off' | 'embedding',
 ): Promise<ReviewApiResponse> {
   if (!question || !question.trim()) {
     throw new ApiError(0, 'question must not be blank', '/api/review');
@@ -312,6 +314,8 @@ export async function submitReview(
       const formData = new FormData();
       formData.append('question', question);
       formData.append('material_text', materialText || '');
+      formData.append('review_mode', reviewMode ?? 'llm');
+      formData.append('rerank_mode', rerankMode ?? 'off');
       formData.append('file', file);
       response = await fetch(url, {
         method: 'POST',
@@ -323,6 +327,8 @@ export async function submitReview(
       const formData = new FormData();
       formData.append('question', question);
       formData.append('material_text', materialText);
+      formData.append('review_mode', reviewMode ?? 'llm');
+      formData.append('rerank_mode', rerankMode ?? 'off');
       response = await fetch(url, {
         method: 'POST',
         body: formData,

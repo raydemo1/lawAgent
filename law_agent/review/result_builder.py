@@ -388,9 +388,10 @@ def validate_grounded_claims(
        but cannot be inlined as clause citations in the conclusion.
 
     Claims that only restate material facts may legitimately have no legal
-    chunk support, so they are omitted from the grounded-claim rail. The
-    result fails only when every emitted claim loses support; fabricating a
-    legal citation is never an acceptable fallback.
+    chunk support, so they are omitted from the grounded-claim rail. When
+    every emitted claim loses support the result degrades to an empty
+    claim list (the workflow still produces a conclusion with risk level
+    and citations) rather than crashing the entire review.
     """
 
     allowed_ids = {hit.chunk_id for hit in evidence_hits}
@@ -398,25 +399,16 @@ def validate_grounded_claims(
     if not citable_ids:
         return []
     cleaned: list[GroundedClaim] = []
-    empty_claims: list[str] = []
     for claim in claims:
         valid_ids = [
             cid for cid in claim.supporting_chunk_ids
             if cid in allowed_ids and cid in citable_ids
         ]
         if not valid_ids:
-            empty_claims.append(claim.text)
             continue
         cleaned.append(
             claim.model_copy(update={"supporting_chunk_ids": valid_ids})
         )
-    if empty_claims and not cleaned:
-        details = {
-            "empty_claims": empty_claims,
-            "allowed_chunk_ids": sorted(allowed_ids),
-            "citable_chunk_ids": sorted(citable_ids),
-        }
-        raise ValueError(f"claim grounding validation failed: {details}")
     return cleaned
 
 

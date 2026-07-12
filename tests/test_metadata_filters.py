@@ -1,5 +1,6 @@
 from law_agent.data.citation_policy import (
     can_cite_clause,
+    can_cite_clause_chunk,
     citation_role_for_source,
     default_retrievable_for_source,
     frontend_direct_reference_for_source,
@@ -86,7 +87,10 @@ def test_citation_policy_marks_only_primary_sources_clause_citable() -> None:
     assert citation_role_for_source("missing_20260702_009") == "primary_legal_basis"
     assert citation_role_for_source("missing_20260702_011") == "conditional_local_basis"
     assert citation_role_for_source("missing_20260702_001") == "conditional_industry_basis"
+    assert can_cite_clause("missing_20260702_001") is False
+    assert can_cite_clause_chunk("missing_20260702_001", "第十三条") is False
     assert citation_role_for_source("missing_20260702_002") == "conditional_industry_basis"
+    assert can_cite_clause("missing_20260702_002") is False
     assert citation_role_for_source("missing_20260702_004") == "conditional_industry_basis"
     assert citation_role_for_source("missing_20260702_012") == "conditional_industry_basis"
     assert citation_role_for_source("missing_20260702_006") == "interpretation_auxiliary"

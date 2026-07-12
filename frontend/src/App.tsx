@@ -45,6 +45,8 @@ export default function App(): JSX.Element {
   //      can pre-fill the input, and so "rerun from case" can populate it) -
   const [question, setQuestion] = useState<string>('');
   const [material, setMaterial] = useState<string>('');
+  const [reviewMode, setReviewMode] = useState<'llm' | 'multi_agent'>('llm');
+  const [rerankMode, setRerankMode] = useState<'off' | 'embedding'>('off');
   const [currentResult, setCurrentResult] = useState<ReviewApiResponse | null>(
     null,
   );
@@ -65,7 +67,7 @@ export default function App(): JSX.Element {
       setLoading(true);
       setError(null);
       try {
-        const response = await submitReview(q, m, file);
+        const response = await submitReview(q, m, file, reviewMode, rerankMode);
         // Persist the submission to the local case store so it appears in
         // the sidebar history and can be reopened / annotated / exported.
         const saved = saveCase(response, q, m, file?.name ?? null);
@@ -84,7 +86,7 @@ export default function App(): JSX.Element {
         setLoading(false);
       }
     },
-    [],
+    [reviewMode, rerankMode],
   );
 
   const handleScenarioClick = useCallback((scenario: string) => {
@@ -184,8 +186,12 @@ export default function App(): JSX.Element {
           <WorkbenchPage
             question={question}
             material={material}
+            reviewMode={reviewMode}
+            rerankMode={rerankMode}
             onQuestionChange={setQuestion}
             onMaterialChange={setMaterial}
+            onReviewModeChange={setReviewMode}
+            onRerankModeChange={setRerankMode}
             onSubmit={handleSubmit}
             loading={loading}
             error={error}
@@ -197,8 +203,12 @@ export default function App(): JSX.Element {
           <WorkbenchPage
             question={question}
             material={material}
+            reviewMode={reviewMode}
+            rerankMode={rerankMode}
             onQuestionChange={setQuestion}
             onMaterialChange={setMaterial}
+            onReviewModeChange={setReviewMode}
+            onRerankModeChange={setRerankMode}
             onSubmit={handleSubmit}
             loading={loading}
             error={error}

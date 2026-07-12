@@ -4,20 +4,24 @@
 
 LawAgent 是一个面向企业数据合规政策研究的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 LLM Case Analyst、按议题 Evidence Researchers、Compliance Reviewer 和条件式 Evidence Critic 协作；Critic 最多触发一次定向补检索和一次证据约束的局部 patch 修订，检索不可满足的法规要求会降级为 evidence gap，而不是交给模型猜测。
 
-项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[三阶段评测对比](docs/evaluation/phase-comparison.md) 记录质量/成本权衡与失败归因；[Phase 4 评测体系审查](docs/evaluation/phase4-evaluation-audit.md) 说明当前指标缺陷与真实上限判断；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
+项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[当前手工标注评测对比](docs/evaluation/optimized-current-comparison.md) 记录 LLM、rerank 与 Multi-Agent 的质量/成本权衡；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
 
 ## Full evaluation result
 
-| Metric | Single workflow | Bounded Multi-Agent | Deep Multi-Agent* |
+| Metric | LLM | LLM + rerank | Bounded Multi-Agent |
 |---|---:|---:|---:|
-| Recall@5 | 0.8059 | 0.8364 | 0.8496 |
-| MRR@10 | 0.8618 | 0.8618 | 0.8679 |
-| Abstention accuracy | 0.9756 | 0.9878 | 1.0000 |
-| Citation violations | 0 | 0 | 0 |
-| Mean total latency | 57.00 s | 65.89 s | 92.96 s |
-| Total LLM calls | 164 | 214 | 313 |
+| Recall@5 | 0.8432 | 0.8586 | **0.8607** |
+| Must-have Recall@5 | 0.8706 | **0.8925** | 0.8794 |
+| Optional coverage@5 | 0.6964 | 0.6607 | **0.7857** |
+| MRR@10 | 0.8553 | **0.8816** | 0.8575 |
+| Candidate Recall@50 | 0.9200 | 0.9200 | **0.9507** |
+| Bad cases (`Recall@5 < 0.5`) | 4 | 6 | **2** |
+| Abstention accuracy | 1.0000 | 1.0000 | 1.0000 |
+| Mean total latency | **10.37 s** | 10.40 s | 19.46 s |
+| Total LLM calls | **84** | **84** | 215 |
+| Duplicate sources@10 | **0.0000** | **0.0000** | 0.2073 |
 
-三阶段均使用相同 82 case、冻结 facts/query、真实 service 检索、DeepSeek Flash、rerank off 和 8 workers。`*` 深版数字由原 full 的 77 个成功结果与修复 fallback 后的 5 个失败案例重放合并，原始未修复 full 结果也完整保留。详细口径见[实验对比报告](docs/evaluation/phase-comparison.md)。
+三组均使用相同 82 case、真实 service 检索、DeepSeek Flash 和手工复核的核心/辅助法源标签。Must-have 覆盖 76 个有核心法源的场景，Optional 仅覆盖 28 个真正需要指南、模板、Q&A 或国标的场景。rerank 在低调用成本下提升核心法源与排序质量，但存在个别案例回退和 embedding 服务超时风险；Multi-Agent 主要换取更广的辅助来源覆盖。详细口径见[当前评测对比](docs/evaluation/optimized-current-comparison.md)。
 
 ## 开发命令
 

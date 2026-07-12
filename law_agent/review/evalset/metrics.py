@@ -143,6 +143,12 @@ def evaluate_case(
         scenario.expected_sources,
         5,
     )
+    must_have_recall_5, _must_have_missing = compute_recall_at_k(
+        hits, scenario.must_have_sources, 5
+    )
+    optional_coverage_5, _optional_missing = compute_recall_at_k(
+        hits, scenario.optional_supporting_sources, 5
+    )
     duplicate_sources_10 = count_duplicate_sources_at_k(hits, 10)
 
     # Abstention check
@@ -201,6 +207,12 @@ def evaluate_case(
         distinct_source_recall_at_5=(
             round(distinct_recall_5, 4) if distinct_recall_5 is not None else None
         ),
+        must_have_recall_at_5=(
+            round(must_have_recall_5, 4) if must_have_recall_5 is not None else None
+        ),
+        optional_coverage_at_5=(
+            round(optional_coverage_5, 4) if optional_coverage_5 is not None else None
+        ),
         duplicate_source_count_at_10=duplicate_sources_10,
         abstention_correct=abstention_correct,
         second_retrieval_triggered=second_retrieval_triggered,
@@ -257,6 +269,16 @@ def aggregate_metrics(
         sum(c.distinct_source_recall_at_5 or 0.0 for c in source_bearing)
         / retrieval_denominator
     )
+    must_have_cases = [c for c in case_results if c.must_have_recall_at_5 is not None]
+    optional_cases = [c for c in case_results if c.optional_coverage_at_5 is not None]
+    mean_must_have_recall_5 = (
+        sum(c.must_have_recall_at_5 or 0.0 for c in must_have_cases)
+        / (len(must_have_cases) or 1)
+    )
+    mean_optional_coverage_5 = (
+        sum(c.optional_coverage_at_5 or 0.0 for c in optional_cases)
+        / (len(optional_cases) or 1)
+    )
     mean_duplicate_sources_10 = (
         sum(c.duplicate_source_count_at_10 for c in case_results) / total
     )
@@ -299,6 +321,10 @@ def aggregate_metrics(
         mean_mrr_at_10=round(mean_mrr, 4),
         mean_candidate_recall_at_50=round(mean_candidate_recall_50, 4),
         mean_distinct_source_recall_at_5=round(mean_distinct_recall_5, 4),
+        mean_must_have_recall_at_5=round(mean_must_have_recall_5, 4),
+        mean_optional_coverage_at_5=round(mean_optional_coverage_5, 4),
+        must_have_case_count=len(must_have_cases),
+        optional_supporting_case_count=len(optional_cases),
         mean_duplicate_source_count_at_10=round(mean_duplicate_sources_10, 4),
         abstention_accuracy=round(abstention_correct / total, 4),
         second_retrieval_trigger_rate=round(second_retrieval_fired / total, 4),

@@ -379,7 +379,7 @@ def test_result_generation_prompt_receives_trace_context() -> None:
     assert "手机号发送给新加坡服务商" in prompt
 
 
-def test_result_generation_rejects_unknown_claim_support_id() -> None:
+def test_result_generation_degrades_when_all_claims_ungrounded() -> None:
     client = FakeClient(
         outputs=[
             {
@@ -399,26 +399,27 @@ def test_result_generation_rejects_unknown_claim_support_id() -> None:
         ]
     )
 
-    with pytest.raises(ReviewWorkflowFailed) as exc_info:
-        build_review_result_with_deepseek(
-            review_result_id="result_1",
-            review_case_id="review_1",
-            trace_id="trace_1",
-            facts=ReviewFacts(cross_border_transfer=True),
-            self_check=EvidenceSelfCheck(status="sufficient"),
-            evidence_hits=[_hit()],
-            client=client,  # type: ignore[arg-type]
-            max_retries=0,
-        )
+    result = build_review_result_with_deepseek(
+        review_result_id="result_1",
+        review_case_id="review_1",
+        trace_id="trace_1",
+        facts=ReviewFacts(cross_border_transfer=True),
+        self_check=EvidenceSelfCheck(status="sufficient"),
+        evidence_hits=[_hit()],
+        client=client,  # type: ignore[arg-type]
+        max_retries=0,
+    )
 
-    assert exc_info.value.reason == "claim_grounding_validation_failed"
-    # Unknown chunk ids are silently dropped; the claim ends up with no
-    # supporting ids, which is what we surface. The error message lists
-    # the empty claim text rather than the dropped chunk id.
-    assert "empty_claims" in exc_info.value.message
+    # All claims referenced unknown chunks → claims silently dropped to []
+    # instead of crashing the workflow.
+    assert result.claims == []
+    assert result.risk_level == "medium"
+    assert len(client.calls) == 1
 
 
-def test_result_generation_retries_claim_grounding_validation() -> None:
+def test_result_generation_no_retry_on_all_claims_ungrounded() -> None:
+    """When all claims lose grounding support, the workflow degrades to
+    empty claims without retrying — graceful degradation replaces crash."""
     reset_telemetry()
     invalid = {
         "risk_level": "medium",
@@ -434,16 +435,7 @@ def test_result_generation_retries_claim_grounding_validation() -> None:
         "recommended_actions": ["补充确认"],
         "risk_boundaries": ["基于当前材料。"],
     }
-    valid = {
-        **invalid,
-        "claims": [
-            {
-                "text": "该场景涉及数据出境。",
-                "supporting_chunk_ids": ["c1"],
-            }
-        ],
-    }
-    client = FakeClient(outputs=[invalid, valid])
+    client = FakeClient(outputs=[invalid])
 
     result = build_review_result_with_deepseek(
         review_result_id="result_1",
@@ -456,10 +448,9 @@ def test_result_generation_retries_claim_grounding_validation() -> None:
         max_retries=1,
     )
 
-    assert result.claims[0].supporting_chunk_ids == ["c1"]
-    assert len(client.calls) == 2
-    assert "claim grounding" in client.calls[1][-1].content
-    assert current_telemetry().retry_count >= 1
+    # No retry — claims silently dropped, workflow still produces a result.
+    assert result.claims == []
+    assert len(client.calls) == 1
 
 
 def test_result_generation_drops_ungrounded_material_fact_claim() -> None:
@@ -820,7 +811,7 @@ def test_revision_compiler_prefers_replacement_over_duplicate_removal() -> None:
     assert [claim.text for claim in result.claims] == ["收窄后的主张。"]
 
 
-def test_revision_application_failure_is_a_degraded_workflow_failure() -> None:
+def test_revision_application_degrades_when_claims_lose_support() -> None:
     original = ReviewResult(
         review_result_id="result_1",
         review_case_id="review_1",
@@ -831,15 +822,17 @@ def test_revision_application_failure_is_a_degraded_workflow_failure() -> None:
         claims=[{"text": "原主张。", "supporting_chunk_ids": ["old_chunk"]}],
     )
 
-    with pytest.raises(ReviewWorkflowFailed) as exc_info:
-        revise_review_result_with_deepseek(
-            result=original,
-            actions=[RevisionAction(
-                operation="mark_evidence_gap", reason="缺少当前依据"
-            )],
-            evidence_hits=[_hit()],
-            client=FakeClient(outputs=[]),  # type: ignore[arg-type]
-            max_retries=0,
-        )
+    result = revise_review_result_with_deepseek(
+        result=original,
+        actions=[RevisionAction(
+            operation="mark_evidence_gap", reason="缺少当前依据"
+        )],
+        evidence_hits=[_hit()],
+        client=FakeClient(outputs=[]),  # type: ignore[arg-type]
+        max_retries=0,
+    )
 
-    assert exc_info.value.reason == "revision_patch_application_failed"
+    # Claim referenced a stale chunk_id not in current evidence → silently
+    # dropped to [] instead of crashing the revision workflow.
+    assert result.claims == []
+    assert "缺少当前依据" in result.missing_information

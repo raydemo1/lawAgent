@@ -328,11 +328,11 @@ export interface HealthResponse {
  */
 export interface CaseMetricResult {
   case_id: string;
-  recall_at_3: number;
-  recall_at_5: number;
-  mrr_at_10: number;
-  candidate_recall_at_50: number;
-  distinct_source_recall_at_5: number;
+  recall_at_3: number | null;
+  recall_at_5: number | null;
+  mrr_at_10: number | null;
+  candidate_recall_at_50: number | null;
+  distinct_source_recall_at_5: number | null;
   duplicate_source_count_at_10: number;
   citation_violation_count: number;
   abstention_correct: boolean;
@@ -345,6 +345,10 @@ export interface CaseMetricResult {
   is_bad_case: boolean;
   bad_reasons: string[];
   risk_level: string;
+  /** Must-have Recall@5 — null for abstention/out-of-corpus cases. */
+  must_have_recall_at_5: number | null;
+  /** Optional coverage@5 — null when the case has no optional sources. */
+  optional_coverage_at_5: number | null;
 }
 
 /**
@@ -366,6 +370,13 @@ export interface ModeMetrics {
   total_citation_violations: number;
   bad_case_count: number;
   total_cases: number;
+  /** Must-have Recall@5 均值（仅含有 must-have 源的案例）。 */
+  mean_must_have_recall_at_5: number;
+  must_have_case_count: number;
+  /** Optional coverage@5 均值（仅含有 optional 源的案例）。 */
+  mean_optional_coverage_at_5: number;
+  optional_supporting_case_count: number;
+  source_bearing_case_count: number;
 }
 
 /**

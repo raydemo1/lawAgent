@@ -434,6 +434,14 @@ def format_summary_text(summary: EvalSummary) -> str:
         lines.append(f"  Mean MRR@10:        {metrics.mean_mrr_at_10:.4f}")
         lines.append(f"  Candidate Recall@50: {metrics.mean_candidate_recall_at_50:.4f}")
         lines.append(f"  Distinct Recall@5:  {metrics.mean_distinct_source_recall_at_5:.4f}")
+        lines.append(
+            f"  Must-have Recall@5: {metrics.mean_must_have_recall_at_5:.4f} "
+            f"({metrics.must_have_case_count} cases)"
+        )
+        lines.append(
+            f"  Optional coverage@5: {metrics.mean_optional_coverage_at_5:.4f} "
+            f"({metrics.optional_supporting_case_count} cases)"
+        )
         lines.append(f"  Duplicate src@10:   {metrics.mean_duplicate_source_count_at_10:.4f}")
         lines.append(f"  Abstention accuracy: {metrics.abstention_accuracy:.4f}")
         lines.append(f"  Second retrieval trigger rate: {metrics.second_retrieval_trigger_rate:.4f}")
@@ -517,6 +525,8 @@ def format_summary_markdown(
                 f"| Recall@5 | {metrics.mean_recall_at_5:.4f} |",
                 f"| MRR@10 | {metrics.mean_mrr_at_10:.4f} |",
                 f"| Candidate Recall@50 | {metrics.mean_candidate_recall_at_50:.4f} |",
+                f"| Must-have Recall@5 | {metrics.mean_must_have_recall_at_5:.4f} ({metrics.must_have_case_count} cases) |",
+                f"| Optional coverage@5 | {metrics.mean_optional_coverage_at_5:.4f} ({metrics.optional_supporting_case_count} cases) |",
                 f"| Abstention accuracy | {metrics.abstention_accuracy:.4f} |",
                 f"| Second retrieval trigger rate | {metrics.second_retrieval_trigger_rate:.4f} |",
                 f"| Bad cases | {metrics.bad_case_count} |",

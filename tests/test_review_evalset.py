@@ -95,6 +95,14 @@ def test_full_suite_covers_required_domains() -> None:
     assert required <= tags
 
 
+def test_source_bearing_scenarios_partition_must_have_and_optional_sources() -> None:
+    for scenario in get_scenarios("full"):
+        must_have = set(scenario.must_have_sources)
+        optional = set(scenario.optional_supporting_sources)
+        assert must_have.isdisjoint(optional)
+        assert must_have | optional == set(scenario.expected_sources)
+
+
 # ---------------------------------------------------------------------------
 # Recall@K tests
 # ---------------------------------------------------------------------------

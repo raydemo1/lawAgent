@@ -25,10 +25,12 @@ def _hit(
 
 def _scenario(expected_sources: list[str]) -> EvalScenario:
     return EvalScenario(
-        case_id="test_citation",
+        case_id="test_citation_manual",
         question="问题",
         material_text="材料",
         expected_sources=expected_sources,
+        must_have_sources=list(expected_sources),
+        optional_supporting_sources=[],
     )
 
 
@@ -61,3 +63,17 @@ def test_candidate_recall_uses_strict_unique_top_50_chunks() -> None:
     )
     assert result.candidate_recall_at_50 == 0.0
     assert result.candidate_unique_source_count == 1
+
+
+def test_must_have_recall_excludes_optional_supporting_sources() -> None:
+    scenario = EvalScenario(
+        case_id="requirements_manual",
+        question="问题",
+        material_text="材料",
+        expected_sources=["law", "guide"],
+        must_have_sources=["law"],
+        optional_supporting_sources=["guide"],
+    )
+    result = evaluate_case(scenario, [_hit(source_id="law")])
+    assert result.must_have_recall_at_5 == 1.0
+    assert result.optional_coverage_at_5 == 0.0

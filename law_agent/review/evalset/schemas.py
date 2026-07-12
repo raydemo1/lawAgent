@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
+from law_agent.review.evalset.manual_labels import MANUAL_LABELS
 from law_agent.review.schemas import StrictModel
 from law_agent.review.schemas import AgentStep
 
@@ -32,6 +33,14 @@ class EvalScenario(StrictModel):
         default_factory=list,
         description="source_id values that should appear in top results",
     )
+    must_have_sources: list[str] = Field(
+        default_factory=list,
+        description="Expected clause-citable sources required for core legal coverage.",
+    )
+    optional_supporting_sources: list[str] = Field(
+        default_factory=list,
+        description="Expected non-citable sources that add context or implementation detail.",
+    )
     expected_citation_roles: list[str] = Field(
         default_factory=list,
         description="citation_role values expected in results",
@@ -46,6 +55,25 @@ class EvalScenario(StrictModel):
         description="chunk_id values that must NOT appear as can_cite_clause=True",
     )
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def apply_manual_labels(self) -> "EvalScenario":
+        """Apply manually curated must-have/optional labels.
+
+        All labels are defined in ``manual_labels.py`` — no automatic
+        rule-based partitioning is used.
+        """
+        if self.case_id in MANUAL_LABELS:
+            must, opt = MANUAL_LABELS[self.case_id]
+            self.must_have_sources = list(must)
+            self.optional_supporting_sources = list(opt)
+        must_have = set(self.must_have_sources)
+        optional = set(self.optional_supporting_sources)
+        if must_have & optional:
+            raise ValueError("must-have and optional sources must be disjoint")
+        if must_have | optional != set(self.expected_sources):
+            raise ValueError("must-have and optional sources must partition expected sources")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +90,8 @@ class CaseMetricResult(StrictModel):
     candidate_recall_at_50: float | None = None
     candidate_unique_source_count: int = 0
     distinct_source_recall_at_5: float | None = None
+    must_have_recall_at_5: float | None = None
+    optional_coverage_at_5: float | None = None
     duplicate_source_count_at_10: int = 0
     abstention_correct: bool
     # Fact only: did the pipeline trigger second retrieval? No expectation
@@ -102,6 +132,10 @@ class ModeMetrics(StrictModel):
     mean_mrr_at_10: float
     mean_candidate_recall_at_50: float = 0.0
     mean_distinct_source_recall_at_5: float = 0.0
+    mean_must_have_recall_at_5: float = 0.0
+    mean_optional_coverage_at_5: float = 0.0
+    must_have_case_count: int = 0
+    optional_supporting_case_count: int = 0
     mean_duplicate_source_count_at_10: float = 0.0
     abstention_accuracy: float
     # Diagnostic only: fraction of cases where second retrieval fired.

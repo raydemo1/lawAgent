@@ -119,6 +119,8 @@ class ReviewRequest(BaseModel):
 
     question: str = Field(..., min_length=1, description="The review question")
     material_text: str = Field(..., min_length=1, description="The material text to review")
+    review_mode: str = Field(default="llm", description="Review pipeline: 'llm' or 'multi_agent'")
+    rerank_mode: RerankMode = Field(default="off", description="Rerank arm: 'off' or 'embedding'")
 
 
 class ReviewResponse(BaseModel):
@@ -348,6 +350,8 @@ def create_app(
         request: Request,
         question: str | None = Form(default=None),
         material_text: str = Form(default=""),
+        review_mode: str = Form(default=""),
+        rerank_mode: str = Form(default="off"),
         file: UploadFile | None = File(default=None),
     ) -> ReviewResponse | JSONResponse:
         """Run a full review case: create case, hybrid retrieval, build result.
@@ -372,6 +376,13 @@ def create_app(
                 raise HTTPException(status_code=422, detail=exc.errors())
             question = payload.question
             material_text = payload.material_text
+            if not review_mode:
+                review_mode = payload.review_mode
+            if not rerank_mode or rerank_mode == "off":
+                rerank_mode = payload.rerank_mode
+
+        # Resolve review_mode: per-request override > app default
+        effective_review_mode = review_mode.strip() if review_mode.strip() else app.state.review_mode
 
         if question is None:
             raise HTTPException(
@@ -483,7 +494,7 @@ def create_app(
                         question=question,
                         material=material_record,
                         output_dir=tmp_path,
-                        review_mode=app.state.review_mode,
+                        review_mode=effective_review_mode,
                     )
                 else:
                     # --- Pasted text mode ---
@@ -496,7 +507,7 @@ def create_app(
                         question=question,
                         material_text=material_text,
                         output_dir=tmp_path,
-                        review_mode=app.state.review_mode,
+                        review_mode=effective_review_mode,
                     )
 
                 case_id = response.review_case.review_case_id
@@ -511,7 +522,8 @@ def create_app(
                         case_id=case_id,
                         chunks_path=app.state.chunks_path,
                         output_dir=tmp_path,
-                        review_mode=app.state.review_mode,
+                        review_mode=effective_review_mode,
+                        rerank_mode=rerank_mode,
                         output_format="markdown",
                     )
                 else:
@@ -519,7 +531,8 @@ def create_app(
                         case_id=case_id,
                         chunks_path=app.state.chunks_path,
                         output_dir=tmp_path,
-                        review_mode=app.state.review_mode,
+                        review_mode=effective_review_mode,
+                        rerank_mode=rerank_mode,
                         output_format="markdown",
                     )
 

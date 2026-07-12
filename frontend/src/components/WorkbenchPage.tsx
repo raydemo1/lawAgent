@@ -34,10 +34,18 @@ export interface WorkbenchPageProps {
   question: string;
   /** Current material text (controlled). */
   material: string;
+  /** Current review mode: 'llm' or 'multi_agent'. */
+  reviewMode: 'llm' | 'multi_agent';
+  /** Current rerank mode: 'off' or 'embedding'. */
+  rerankMode: 'off' | 'embedding';
   /** Update the review question. */
   onQuestionChange: (value: string) => void;
   /** Update the material text. */
   onMaterialChange: (value: string) => void;
+  /** Update the review mode. */
+  onReviewModeChange: (mode: 'llm' | 'multi_agent') => void;
+  /** Update the rerank mode. */
+  onRerankModeChange: (mode: 'off' | 'embedding') => void;
   /** Called with question + material + optional file when the user submits. */
   onSubmit: (question: string, material: string, file?: File | null) => void;
   /** True while a review request is in flight. */
@@ -121,8 +129,12 @@ function CitationGroupItem({ group }: { group: CitationGroup }): JSX.Element {
 export default function WorkbenchPage({
   question,
   material,
+  reviewMode,
+  rerankMode,
   onQuestionChange,
   onMaterialChange,
+  onReviewModeChange,
+  onRerankModeChange,
   onSubmit,
   loading,
   result,
@@ -293,10 +305,37 @@ export default function WorkbenchPage({
         <div
           style={{
             display: 'flex',
-            justifyContent: 'flex-end',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             marginTop: 'var(--space-md)',
+            gap: 'var(--space-md)',
           }}
         >
+          <div className="review-mode-select">
+            <label htmlFor="review-mode" className="review-mode-select__label">
+              审查模式
+            </label>
+            <select
+              id="review-mode"
+              className="review-mode-select__dropdown"
+              value={reviewMode}
+              onChange={(e) => onReviewModeChange(e.target.value as 'llm' | 'multi_agent')}
+              disabled={loading}
+            >
+              <option value="llm">LLM 审查</option>
+              <option value="multi_agent">Multi-Agent 审查</option>
+            </select>
+            <span className="review-mode-select__divider" aria-hidden="true" />
+            <button
+              type="button"
+              className={`review-mode-select__rerank${rerankMode === 'embedding' ? ' is-active' : ''}`}
+              onClick={() => onRerankModeChange(rerankMode === 'off' ? 'embedding' : 'off')}
+              disabled={loading}
+              title="开启后使用 Embedding 语义重排序提升检索精度"
+            >
+              Rerank
+            </button>
+          </div>
           <button
             type="button"
             className="case-header__action-btn case-header__action-btn--accent"

@@ -34,12 +34,14 @@ import type {
 // ---------------------------------------------------------------------------
 
 /** Format a 0-1 ratio as a percentage string with one decimal. */
-function pct(value: number): string {
+function pct(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
   return `${(value * 100).toFixed(1)}%`;
 }
 
 /** Format a raw float to four decimals (for MRR). */
-function fixed(value: number, digits = 4): string {
+function fixed(value: number | null | undefined, digits = 4): string {
+  if (value == null || Number.isNaN(value)) return '—';
   return value.toFixed(digits);
 }
 
@@ -104,8 +106,8 @@ function modeLabel(modeKey: string): string {
   const retrieval = parts.find((p) => p.startsWith('retrieval='))?.split('=')[1];
   const review = parts.find((p) => p.startsWith('review='))?.split('=')[1];
   const r = retrieval === 'service' ? 'Service' : 'Local';
-  const v = review === 'llm' ? 'LLM' : 'Local';
-  return `${r} / ${v}`;
+  const v = review === 'llm' ? 'LLM' : review === 'multi_agent' ? 'Multi-Agent' : 'Local';
+  return v;
 }
 
 /** Six radar dimensions, each normalized to 0-1. */
@@ -116,11 +118,12 @@ interface RadarDim {
 }
 
 function radarDims(m: ModeMetrics): RadarDim[] {
+  const safe = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? 0 : v);
   return [
-    { key: 'r3', label: 'Recall@3', value: m.mean_recall_at_3 },
-    { key: 'r5', label: 'Recall@5', value: m.mean_recall_at_5 },
-    { key: 'mrr', label: 'MRR@10', value: m.mean_mrr_at_10 },
-    { key: 'abst', label: '拒答准确', value: m.abstention_accuracy },
+    { key: 'r3', label: 'Recall@3', value: safe(m.mean_recall_at_3) },
+    { key: 'r5', label: 'Recall@5', value: safe(m.mean_recall_at_5) },
+    { key: 'mrr', label: 'MRR@10', value: safe(m.mean_mrr_at_10) },
+    { key: 'abst', label: '拒答准确', value: safe(m.abstention_accuracy) },
     {
       key: 'cite',
       label: '引用合规',
@@ -261,7 +264,7 @@ function RadarChart({
 interface BarRow {
   caseId: string;
   category: string;
-  value: number;
+  value: number | null;
   isBad: boolean;
 }
 
@@ -270,7 +273,7 @@ function BarChart({ rows }: { rows: BarRow[] }): JSX.Element {
   return (
     <div className="eval-bars">
       {rows.map((row) => {
-        const w = `${(row.value / max) * 100}%`;
+        const w = row.value != null ? `${(row.value / max) * 100}%` : '0%';
         const color = CATEGORY_COLORS[row.category] ?? '#94a3b8';
         return (
           <div className="eval-bars__row" key={row.caseId}>
@@ -328,6 +331,7 @@ function CaseRow({ item }: { item: CaseMetricResult }): JSX.Element {
   const category = caseCategory(item.case_id);
   const color = CATEGORY_COLORS[category] ?? '#94a3b8';
   const recall5 = item.recall_at_5;
+  const barWidth = recall5 != null ? `${recall5 * 100}%` : '0%';
 
   return (
     <div className={`case-row${open ? ' is-open' : ''}${item.is_bad_case ? ' is-bad' : ''}`}>
@@ -353,7 +357,7 @@ function CaseRow({ item }: { item: CaseMetricResult }): JSX.Element {
         <span className="case-row__bar" aria-hidden="true">
           <span
             className="case-row__bar-fill"
-            style={{ width: `${recall5 * 100}%`, background: color }}
+            style={{ width: barWidth, background: color }}
           />
         </span>
         <span className="case-row__num">{pct(recall5)}</span>
@@ -492,8 +496,11 @@ export default function EvalPage(): JSX.Element {
         setSummary(latest);
         if (latest && latest.mode_metrics) {
           const keys = Object.keys(latest.mode_metrics);
-          if (keys.length > 0 && !selectedMode) {
-            setSelectedMode(keys[0]);
+          if (keys.length > 0) {
+            // If current selectedMode is not in the new data, switch to the first available
+            setSelectedMode((prev) =>
+              prev && keys.includes(prev) ? prev : keys[0],
+            );
           }
         }
       } catch (err) {
@@ -508,7 +515,7 @@ export default function EvalPage(): JSX.Element {
         setLoading(false);
       }
     },
-    [rerankArm, selectedMode],
+    [rerankArm],
   );
 
   useEffect(() => {
@@ -561,15 +568,15 @@ export default function EvalPage(): JSX.Element {
     <div className="eval-page">
       {/* ---------------- Header ---------------- */}
       <header className="eval-header">
-        <div>
+        <div className="eval-header__left">
           <h1 className="eval-header__title">评测看板</h1>
           <p className="eval-header__desc">
             展示最近一次缓存的全量评测结果。如需重新生成，请在后端运行评测任务。
           </p>
         </div>
-        <div className="eval-header__meta">
+        <div className="eval-header__right">
           {summary ? (
-            <>
+            <div className="eval-header__meta">
               <div className="eval-header__meta-line">
                 <span className="eval-header__meta-label">生成时间</span>
                 <span className="eval-header__meta-value">
@@ -582,42 +589,47 @@ export default function EvalPage(): JSX.Element {
                   {summary.chunks_path.split(/[\\/]/).pop() ?? summary.chunks_path}
                 </span>
               </div>
-              <div className="eval-header__meta-line">
-                <span className="eval-header__meta-label">用例集</span>
-                <span className="eval-header__meta-value" title={summary.cases_path}>
-                  {summary.cases_path.split(/[\\/]/).pop() ?? summary.cases_path}
-                </span>
-              </div>
-            </>
+            </div>
           ) : (
             <div className="eval-header__meta-line">暂无缓存结果</div>
           )}
-          <div className="eval-header__arm-toggle" role="group" aria-label="Rerank 分组">
+          <div className="eval-header__controls">
+            <div className="eval-toolbar">
+              {modeKeys.map((key) => {
+                const active = key === activeMode;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`eval-toolbar__chip${active ? ' is-active' : ''}`}
+                    onClick={() => setSelectedMode(key)}
+                    disabled={loading}
+                    title={`切换到 ${modeLabel(key)} 模式`}
+                  >
+                    {modeLabel(key)}
+                  </button>
+                );
+              })}
+              <span className="eval-toolbar__divider" aria-hidden="true" />
+              <button
+                type="button"
+                className={`eval-toolbar__chip${rerankArm === 'embedding' ? ' is-active' : ''}`}
+                onClick={() => setRerankArm(rerankArm === 'off' ? 'embedding' : 'off')}
+                disabled={loading}
+                title="切换 Rerank 模式（Embedding 语义重排序）"
+              >
+                Rerank模式
+              </button>
+            </div>
             <button
               type="button"
-              className={`btn-secondary eval-header__arm-btn${rerankArm === 'off' ? ' is-active' : ''}`}
-              onClick={() => setRerankArm('off')}
+              className="btn-secondary eval-header__refresh"
+              onClick={() => fetchLatest(rerankArm)}
               disabled={loading}
             >
-              ReRank: off
-            </button>
-            <button
-              type="button"
-              className={`btn-secondary eval-header__arm-btn${rerankArm === 'embedding' ? ' is-active' : ''}`}
-              onClick={() => setRerankArm('embedding')}
-              disabled={loading}
-            >
-              ReRank: on
+              {loading ? '刷新中…' : '刷新'}
             </button>
           </div>
-          <button
-            type="button"
-            className="btn-secondary eval-header__refresh"
-            onClick={() => fetchLatest(rerankArm)}
-            disabled={loading}
-          >
-            {loading ? '刷新中…' : '刷新'}
-          </button>
         </div>
       </header>
 
@@ -663,14 +675,22 @@ export default function EvalPage(): JSX.Element {
           {/* Core metric cards */}
           <section className="eval-cards">
             <MetricCard
-              label="Recall@3"
-              value={pct(activeMetrics.mean_recall_at_3)}
-              tone={activeMetrics.mean_recall_at_3 >= 0.7 ? 'good' : 'warn'}
+              label="Must-have Recall@5"
+              value={pct(activeMetrics.mean_must_have_recall_at_5)}
+              sub={`核心法律依据 · ${activeMetrics.must_have_case_count} 例`}
+              tone={activeMetrics.mean_must_have_recall_at_5 >= 0.85 ? 'good' : 'warn'}
             />
             <MetricCard
               label="Recall@5"
               value={pct(activeMetrics.mean_recall_at_5)}
+              sub={`全部预期源 · ${activeMetrics.source_bearing_case_count} 例`}
               tone={activeMetrics.mean_recall_at_5 >= 0.7 ? 'good' : 'warn'}
+            />
+            <MetricCard
+              label="Optional coverage@5"
+              value={pct(activeMetrics.mean_optional_coverage_at_5)}
+              sub={`辅助参考 · ${activeMetrics.optional_supporting_case_count} 例`}
+              tone={activeMetrics.mean_optional_coverage_at_5 >= 0.7 ? 'good' : 'warn'}
             />
             <MetricCard
               label="MRR@10"
@@ -681,12 +701,6 @@ export default function EvalPage(): JSX.Element {
               label="拒答准确率"
               value={pct(activeMetrics.abstention_accuracy)}
               tone={activeMetrics.abstention_accuracy >= 0.9 ? 'good' : 'bad'}
-            />
-            <MetricCard
-              label="二次检索触发率"
-              value={pct(activeMetrics.second_retrieval_trigger_rate)}
-              sub="诊断指标，不计坏例"
-              tone="neutral"
             />
             <MetricCard
               label="坏例率"
@@ -706,75 +720,29 @@ export default function EvalPage(): JSX.Element {
             />
           </section>
 
-          {/* Radar + mode selector */}
-          <section className="eval-grid-2">
-            <div className="card eval-grid-2__left">
-              <div className="section-title">能力雷达图</div>
-              <p className="eval-section-hint">
-                六个维度归一化至 0–1：召回、精度、拒答、引用合规、非坏例率。
-              </p>
-              <div className="eval-radar-wrap">
-                <RadarChart series={radarSeries} />
-              </div>
-              {radarSeries.length > 1 ? (
-                <div className="eval-legend">
-                  {radarSeries.map((s) => (
-                    <span key={s.label} className="eval-legend__item">
-                      <span
-                        className="eval-legend__dot"
-                        style={{ background: s.color }}
-                        aria-hidden="true"
-                      />
-                      {s.label}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
+          {/* Radar chart */}
+          <section className="card">
+            <div className="section-title">能力雷达图</div>
+            <p className="eval-section-hint">
+              六个维度归一化至 0–1：召回、精度、拒答、引用合规、非坏例率。
+            </p>
+            <div className="eval-radar-wrap">
+              <RadarChart series={radarSeries} />
             </div>
-
-            <div className="card eval-grid-2__right">
-              <div className="section-title">评测配置</div>
-              <p className="eval-section-hint">
-                选择一组检索+审查模式查看对应指标。
-              </p>
-              <div className="eval-mode-list">
-                {modeKeys.map((key) => {
-                  const m = summary.mode_metrics[key];
-                  const active = key === activeMode;
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`eval-mode-item${active ? ' is-active' : ''}`}
-                      onClick={() => setSelectedMode(key)}
-                    >
-                      <span className="eval-mode-item__label">{modeLabel(key)}</span>
-                      <span className="eval-mode-item__metric">
-                        R@5 {pct(m.mean_recall_at_5)} · 坏例 {m.bad_case_count}/{m.total_cases}
-                      </span>
-                    </button>
-                  );
-                })}
+            {radarSeries.length > 1 ? (
+              <div className="eval-legend">
+                {radarSeries.map((s) => (
+                  <span key={s.label} className="eval-legend__item">
+                    <span
+                      className="eval-legend__dot"
+                      style={{ background: s.color }}
+                      aria-hidden="true"
+                    />
+                    {s.label}
+                  </span>
+                ))}
               </div>
-              <div className="eval-mode-detail">
-                <div className="eval-mode-detail__row">
-                  <span>候选 Recall@50</span>
-                  <strong>{pct(activeMetrics.mean_candidate_recall_at_50)}</strong>
-                </div>
-                <div className="eval-mode-detail__row">
-                  <span>去重源 Recall@5</span>
-                  <strong>{pct(activeMetrics.mean_distinct_source_recall_at_5)}</strong>
-                </div>
-                <div className="eval-mode-detail__row">
-                  <span>平均重复源数@10</span>
-                  <strong>{fixed(activeMetrics.mean_duplicate_source_count_at_10, 2)}</strong>
-                </div>
-                <div className="eval-mode-detail__row">
-                  <span>引用违规总数</span>
-                  <strong>{activeMetrics.total_citation_violations}</strong>
-                </div>
-              </div>
-            </div>
+            ) : null}
           </section>
 
           {/* Per-case bar chart */}
