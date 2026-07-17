@@ -24,6 +24,7 @@ import type {
   ReviewApiResponse,
 } from '../types/api'
 import { isReviewFailedResponse } from '../types/api'
+import { cssId } from './GroundedClaims'
 
 interface EvidenceDossierProps {
   /** The most recent review response, or null before any review runs. */
@@ -207,7 +208,11 @@ interface CitationItemProps {
 
 function CitationItem({ citation }: CitationItemProps): JSX.Element {
   return (
-    <div className="dossier-citation">
+    <div
+      className="dossier-citation"
+      id={`evidence-${cssId(citation.chunk_id)}`}
+      tabIndex={-1}
+    >
       <div className="dossier-citation-title">
         {citation.citation_label ?? citation.title}
       </div>

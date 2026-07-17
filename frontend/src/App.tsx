@@ -26,6 +26,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { ReviewApiResponse } from './types/api';
+import { isReviewFailedResponse } from './types/api';
 import { ApiError, submitReview } from './api/client';
 import Sidebar from './components/Sidebar';
 import type { Page } from './components/Sidebar';
@@ -66,6 +67,7 @@ export default function App(): JSX.Element {
     async (q: string, m: string, file?: File | null) => {
       setLoading(true);
       setError(null);
+      setCurrentResult(null);
       try {
         const response = await submitReview(q, m, file, reviewMode, rerankMode);
         // Persist the submission to the local case store so it appears in
@@ -134,7 +136,10 @@ export default function App(): JSX.Element {
 
   // The workbench uses the global dossier. Case detail owns a report-side
   // citation rail so the first screen reads like a complete review report.
-  const showDossier = currentPage === 'workbench';
+  const showDossier =
+    currentPage === 'workbench' &&
+    currentResult !== null &&
+    !isReviewFailedResponse(currentResult);
 
   // ---- Render -----------------------------------------------------------
   return (

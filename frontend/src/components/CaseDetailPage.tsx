@@ -17,7 +17,7 @@
  * store. Failed cases render a compact failure summary instead of the chain.
  */
 
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { CitationGroup, CitationUsage, RetrievalHit, ReviewApiResponse, ReviewFacts } from '../types/api';
 import { isReviewFailedResponse } from '../types/api';
 import type { CitationVerdict, SavedCase } from '../types/case';
@@ -209,6 +209,8 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
   const queries = response.retrieval_queries ?? [];
   const evidenceChunks = response.evidence_chunks ?? [];
   const verdicts = saved.feedback?.citationVerdicts ?? {};
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [evidenceAnnouncement, setEvidenceAnnouncement] = useState('');
 
   const evidenceCount = evidenceChunks.length;
   const citationCount = useMemo(
@@ -216,8 +218,28 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
     [response.citation_groups],
   );
 
+  const handleEvidenceSelect = useCallback((chunkId: string, label: string) => {
+    setSelectedEvidenceId(chunkId);
+    setEvidenceAnnouncement(`已定位到引用依据：${label}`);
+
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById(`evidence-${cssId(chunkId)}`);
+      if (!target) return;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'auto'
+          : 'smooth',
+        block: 'nearest',
+      });
+    });
+  }, []);
+
   return (
     <>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {evidenceAnnouncement}
+      </div>
       <div className="review-report-layout">
         <main className="review-report">
           <section className="card case-conclusion report-card">
@@ -240,6 +262,8 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
               claims={result.claims}
               evidenceChunks={evidenceChunks}
               compact
+              selectedEvidenceId={selectedEvidenceId}
+              onEvidenceSelect={handleEvidenceSelect}
             />
           </section>
 
@@ -314,6 +338,7 @@ function ReviewChain({ saved, onVerdictChange }: ReviewChainProps): JSX.Element 
         <EvidenceSidebar
           groups={response.citation_groups}
           evidenceChunks={evidenceChunks}
+          selectedEvidenceId={selectedEvidenceId}
         />
       </div>
     </>
@@ -458,9 +483,11 @@ function ProcessDetails({
 function EvidenceSidebar({
   groups,
   evidenceChunks,
+  selectedEvidenceId,
 }: {
   groups: CitationGroup[];
   evidenceChunks: RetrievalHit[];
+  selectedEvidenceId: string | null;
 }): JSX.Element {
   const chunks = useMemo(() => {
     const map = new Map<string, RetrievalHit>();
@@ -497,6 +524,7 @@ function EvidenceSidebar({
                   key={item.chunk_id}
                   item={item}
                   index={index}
+                  selected={selectedEvidenceId === item.chunk_id}
                 />
               ))}
             </div>
@@ -510,6 +538,7 @@ function EvidenceSidebar({
                   item={item}
                   index={index}
                   auxiliary
+                  selected={selectedEvidenceId === item.chunk_id}
                 />
               ))}
             </div>
@@ -524,6 +553,7 @@ function EvidenceCard({
   item,
   index,
   auxiliary = false,
+  selected = false,
 }: {
   item: {
     chunk_id: string;
@@ -534,11 +564,18 @@ function EvidenceCard({
   };
   index: number;
   auxiliary?: boolean;
+  selected?: boolean;
 }): JSX.Element {
   return (
     <article
-      className={'evidence-card' + (auxiliary ? ' evidence-card--aux' : '')}
+      className={
+        'evidence-card' +
+        (auxiliary ? ' evidence-card--aux' : '') +
+        (selected ? ' is-selected' : '')
+      }
       id={`evidence-${cssId(item.chunk_id)}`}
+      tabIndex={-1}
+      aria-label={`${USAGE_LABELS[item.groupUsage]}：${item.citation_label ?? item.title}`}
     >
       <div className="evidence-card__top">
         <span className="evidence-card__index">[{shortId(item.chunk_id)}]</span>

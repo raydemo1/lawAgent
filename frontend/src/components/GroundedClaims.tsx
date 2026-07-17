@@ -1,19 +1,22 @@
 import { useMemo } from 'react';
 import type { GroundedClaim, RetrievalHit } from '../types/api';
 import { shortId } from '../utils/display';
+import MarkdownText from './MarkdownText';
 
 interface GroundedClaimsProps {
   claims: GroundedClaim[] | undefined;
   evidenceChunks: RetrievalHit[] | undefined;
   compact?: boolean;
+  selectedEvidenceId?: string | null;
+  onEvidenceSelect?: (chunkId: string, label: string) => void;
 }
-
-const CIRCLED_NUMBERS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
 export default function GroundedClaims({
   claims,
   evidenceChunks,
   compact = false,
+  selectedEvidenceId = null,
+  onEvidenceSelect,
 }: GroundedClaimsProps): JSX.Element | null {
   const chunkMap = useMemo(() => {
     const map = new Map<string, RetrievalHit>();
@@ -24,64 +27,61 @@ export default function GroundedClaims({
   if (!claims || claims.length === 0) return null;
 
   return (
-    <div className={'cite-cards' + (compact ? ' cite-cards--compact' : '')}>
-      <div className="cite-cards__header">引用条款</div>
+    <section
+      className={'grounded-claims' + (compact ? ' grounded-claims--compact' : '')}
+      aria-label="关键判断与引用依据"
+    >
+      <div className="grounded-claims__header">
+        <span>关键判断与引用</span>
+        <span>点击依据可在右栏核对原文</span>
+      </div>
       {claims.map((claim, index) => {
-        const marker = CIRCLED_NUMBERS[index] ?? String(index + 1);
-        // Show the first supporting chunk as the primary cited article.
-        const primaryChunkId = claim.supporting_chunk_ids[0];
-        const chunk = primaryChunkId ? chunkMap.get(primaryChunkId) : undefined;
-        const extraChunks = claim.supporting_chunk_ids
-          .slice(1)
-          .map((id) => chunkMap.get(id))
-          .filter((c): c is RetrievalHit => c !== undefined);
-
         return (
           <article
-            className="cite-card"
+            className="grounded-claim"
             key={`${claim.text}-${index}`}
-            id={`cite-card-${index}`}
           >
-            <div className="cite-card__badge">{marker}</div>
-            <div className="cite-card__body">
-              <div className="cite-card__title">
-                {chunk?.citation_label || chunk?.title || '引用条款'}
-              </div>
-              {chunk && (
-                <blockquote className="cite-card__text">
-                  {chunk.text}
-                </blockquote>
-              )}
-              <div className="cite-card__meta">
-                <span className="cite-card__source">
-                  {chunk?.title || '未知来源'}
-                </span>
-                {chunk?.article_no && (
-                  <span className="cite-card__article">{chunk.article_no}</span>
-                )}
-                <a
-                  className="cite-card__link"
-                  href={`#cite-marker-${index}`}
-                  title="跳转到正文引用位置"
-                >
-                  回到正文
-                </a>
-              </div>
-              {extraChunks.length > 0 && (
-                <div className="cite-card__extras">
-                  <span className="cite-card__extras-label">同时引用：</span>
-                  {extraChunks.map((c) => (
-                    <span className="cite-card__extra" key={c.chunk_id}>
-                      {c.citation_label || c.title}
-                    </span>
-                  ))}
-                </div>
-              )}
+            <div className="grounded-claim__text">
+              <span className="grounded-claim__index" aria-hidden="true">
+                {index + 1}
+              </span>
+              <MarkdownText variant="inline">{claim.text}</MarkdownText>
+            </div>
+            <div className="grounded-claim__refs" aria-label={`判断 ${index + 1} 的引用依据`}>
+              {claim.supporting_chunk_ids.map((chunkId) => {
+                const chunk = chunkMap.get(chunkId);
+                const label = chunk?.citation_label || chunk?.title || `依据 ${shortId(chunkId)}`;
+                const className =
+                  'grounded-claim__ref' +
+                  (selectedEvidenceId === chunkId ? ' is-active' : '');
+
+                return onEvidenceSelect ? (
+                  <button
+                    type="button"
+                    className={className}
+                    key={chunkId}
+                    onClick={() => onEvidenceSelect(chunkId, label)}
+                    aria-pressed={selectedEvidenceId === chunkId}
+                    aria-label={`在引用依据栏查看：${label}`}
+                  >
+                    {label}
+                  </button>
+                ) : (
+                  <a
+                    className={className}
+                    key={chunkId}
+                    href={`#evidence-${cssId(chunkId)}`}
+                    aria-label={`在引用依据栏查看：${label}`}
+                  >
+                    {label}
+                  </a>
+                );
+              })}
             </div>
           </article>
         );
       })}
-    </div>
+    </section>
   );
 }
 

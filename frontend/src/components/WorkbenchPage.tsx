@@ -208,9 +208,17 @@ export default function WorkbenchPage({
   const citationGroups = successResult?.citation_groups ?? [];
   const evidenceSelfCheck = successResult?.evidence_self_check ?? null;
   const evidenceChunks = successResult?.evidence_chunks ?? [];
+  const reviewStatusMessage = loading
+    ? '审查已开始，正在抽取事实、检索依据并检查证据。'
+    : reviewResult
+      ? '审查已完成，报告已生成。'
+      : '';
 
   return (
-    <div className="workbench">
+    <div className="workbench" aria-busy={loading}>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {reviewStatusMessage}
+      </div>
       {/* ---------------- Input section ---------------- */}
       <section className="card">
         <div className="workbench__field">
@@ -244,6 +252,7 @@ export default function WorkbenchPage({
                     type="button"
                     onClick={handleRemoveFile}
                     disabled={loading}
+                    aria-label={`移除文件 ${selectedFile.name}`}
                     style={{
                       border: 'none', background: 'none', cursor: 'pointer',
                       color: 'var(--color-danger)', fontSize: '1rem', lineHeight: 1,
@@ -302,40 +311,49 @@ export default function WorkbenchPage({
           />
         </div>
 
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginTop: 'var(--space-md)',
-            gap: 'var(--space-md)',
-          }}
-        >
-          <div className="review-mode-select">
-            <label htmlFor="review-mode" className="review-mode-select__label">
-              审查模式
-            </label>
-            <select
-              id="review-mode"
-              className="review-mode-select__dropdown"
-              value={reviewMode}
-              onChange={(e) => onReviewModeChange(e.target.value as 'llm' | 'multi_agent')}
-              disabled={loading}
-            >
-              <option value="llm">LLM 审查</option>
-              <option value="multi_agent">Multi-Agent 审查</option>
-            </select>
-            <span className="review-mode-select__divider" aria-hidden="true" />
-            <button
-              type="button"
-              className={`review-mode-select__rerank${rerankMode === 'embedding' ? ' is-active' : ''}`}
-              onClick={() => onRerankModeChange(rerankMode === 'off' ? 'embedding' : 'off')}
-              disabled={loading}
-              title="开启后使用 Embedding 语义重排序提升检索精度"
-            >
-              Rerank
-            </button>
-          </div>
+        <div className="workbench__actions">
+          <details className="workbench-advanced">
+            <summary>
+              高级设置
+              <span className="workbench-advanced__current">
+                {reviewMode === 'multi_agent' ? '深入审查' : '标准审查'}
+                {rerankMode === 'embedding' ? ' · 增强依据排序' : ''}
+              </span>
+            </summary>
+            <div className="workbench-advanced__body">
+              <div className="workbench-advanced__field">
+                <label htmlFor="review-mode" className="review-mode-select__label">
+                  审查深度
+                </label>
+                <select
+                  id="review-mode"
+                  className="review-mode-select__dropdown"
+                  value={reviewMode}
+                  onChange={(e) => onReviewModeChange(e.target.value as 'llm' | 'multi_agent')}
+                  disabled={loading}
+                >
+                  <option value="llm">标准审查</option>
+                  <option value="multi_agent">深入审查（耗时更长）</option>
+                </select>
+                <span className="workbench-advanced__hint">
+                  深入审查会增加独立复核步骤，适合高风险或证据复杂的材料。
+                </span>
+              </div>
+              <label className="workbench-advanced__check" htmlFor="rerank-mode">
+                <input
+                  id="rerank-mode"
+                  type="checkbox"
+                  checked={rerankMode === 'embedding'}
+                  onChange={(e) => onRerankModeChange(e.target.checked ? 'embedding' : 'off')}
+                  disabled={loading}
+                />
+                <span>
+                  <strong>增强依据排序</strong>
+                  <small>优先展示与审查问题语义更接近的依据。</small>
+                </span>
+              </label>
+            </div>
+          </details>
           <button
             type="button"
             className="case-header__action-btn case-header__action-btn--accent"
@@ -377,7 +395,7 @@ export default function WorkbenchPage({
           </span>
           <div>
             <div style={{ fontWeight: 700, marginBottom: '2px' }}>
-              LLM 审查节点失败
+              审查流程失败
             </div>
             <div style={{ wordBreak: 'break-word' }}>
               {failedResult.failed_node}：{failedResult.message}
@@ -395,14 +413,14 @@ export default function WorkbenchPage({
           {onViewDetail ? (
             <div className="workbench__detail-entry">
               <span>
-                审查已完成并保存到案卷历史。查看完整审查链路（查询计划 / 证据原文 / 自检 / 反馈 / 导出）：
+                审查已完成并保存到案卷历史。可继续查看完整报告、引用依据与审查记录：
               </span>
               <button
                 type="button"
                 className="btn-secondary"
                 onClick={onViewDetail}
               >
-                查看完整案卷详情 →
+                查看完整审查报告 →
               </button>
             </div>
           ) : null}
