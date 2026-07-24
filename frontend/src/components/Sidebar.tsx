@@ -71,8 +71,8 @@ export default function Sidebar({
     <aside className="app-sidebar sidebar">
       {/* ---- Brand ---- */}
       <div className="sidebar-brand">
-        <div className="sidebar-brand-title">LawAgent</div>
-        <div className="sidebar-brand-subtitle">法律合规研究工作台</div>
+        <div className="sidebar-brand-title">CrossComply</div>
+        <div className="sidebar-brand-subtitle">数据出境合规智能体</div>
       </div>
 
       {/* ---- Primary navigation ---- */}
@@ -232,7 +232,7 @@ export default function Sidebar({
 
       {/* ---- Footer ---- */}
       <div className="sidebar-footer">
-        LawAgent · 法律合规研究
+        CrossComply · 数据出境合规研究
         <br />
         仅供研究参考，不构成正式法律意见
       </div>

@@ -4,6 +4,14 @@
 
 CrossComply 是一个面向企业数据出境/跨境数据合规审查场景的 Agentic RAG 项目，主线是“材料输入 -> 审查事实抽取 -> 混合检索 -> 证据自检 -> 受控二次召回 -> 结构化审查结果与引用”。复杂审查可使用确定性 Multi-Agent 模式，由 LLM Case Analyst、按议题 Evidence Researchers、Compliance Reviewer 和条件式 Evidence Critic 协作；Critic 最多触发一次定向补检索和一次证据约束的局部 patch 修订，检索不可满足的法规要求会降级为 evidence gap，而不是交给模型猜测。
 
+## Product preview
+
+[在线体验 CrossComply 前端演示](https://crosscomply-agent.vercel.app)
+
+![CrossComply 审查报告与引用依据](docs/images/crosscomply-review-report.png)
+
+公开站内置一份由真实 service 检索生成的审查报告：结论中的关键法律依据与合规义务直接关联右侧法源证据，完整工作流默认收起。公开站不提供共享审查后端；需要运行新的审查时，请按下文部署完整服务。
+
 项目文档只保留长期维护入口：本文件记录日常开发、运行、启动和评测流程；[系统架构](docs/architecture.md) 解释 Supervisor、Agent 与检索模块；[当前手工标注评测对比](docs/evaluation/optimized-current-comparison.md) 记录 LLM、rerank 与 Multi-Agent 的质量/成本权衡；[三条真实 Trace](docs/evaluation/typical-traces.md) 展示直接成功、二次召回和 Critic 修订；[docs/SERVICE_STACK.md](docs/SERVICE_STACK.md) 记录 Elasticsearch + pgvector 部署；[docs/CONTEXT.md](docs/CONTEXT.md) 记录领域语言。
 
 ## Full evaluation result
@@ -400,6 +408,15 @@ cd frontend
 npm run build
 # 产物输出到 frontend/dist/
 ```
+
+公开作品演示可在构建时设置 `VITE_PUBLIC_DEMO=true`，前端将默认打开仓库内置案例，并禁用对共享后端的实时审查请求：
+
+```powershell
+$env:VITE_PUBLIC_DEMO = "true"
+npm run build
+```
+
+若要部署可执行实时审查的个人实例，请先自行部署本仓库的 FastAPI、Elasticsearch 与 pgvector 服务，再让前端通过同域反向代理访问 `/api`；本地开发可直接使用上述 Vite 代理。也可以在构建前端时设置 `VITE_API_BASE_URL` 指向自行部署的 API，并相应配置后端允许该前端域名跨域访问。
 
 ### API 端点
 

@@ -34,11 +34,18 @@ import EvidenceDossier from './components/EvidenceDossier';
 import WorkbenchPage from './components/WorkbenchPage';
 import EvalPage from './components/EvalPage';
 import CaseDetailPage from './components/CaseDetailPage';
-import { saveCase, useCaseStore } from './store/caseStore';
+import {
+  DEMO_CASE_ID,
+  PUBLIC_DEMO_ENABLED,
+  saveCase,
+  useCaseStore,
+} from './store/caseStore';
 
 export default function App(): JSX.Element {
   // ---- Global app state -------------------------------------------------
-  const [currentPage, setCurrentPage] = useState<Page>('workbench');
+  const [currentPage, setCurrentPage] = useState<Page>(
+    PUBLIC_DEMO_ENABLED ? 'case-detail' : 'workbench',
+  );
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +60,9 @@ export default function App(): JSX.Element {
   );
 
   // ---- Case-detail state ------------------------------------------------
-  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(
+    PUBLIC_DEMO_ENABLED ? DEMO_CASE_ID : null,
+  );
   // Subscribe to the case store so the active case stays in sync with any
   // feedback / bad-case / verdict mutations performed inside the detail page.
   const cases = useCaseStore();
@@ -65,6 +74,12 @@ export default function App(): JSX.Element {
   // ---- Handlers ---------------------------------------------------------
   const handleSubmit = useCallback(
     async (q: string, m: string, file?: File | null) => {
+      if (PUBLIC_DEMO_ENABLED) {
+        setError(
+          '当前为公开前端演示站，不运行共享审查后端。请按 README 自行部署后端，并在构建前端时设置 VITE_API_BASE_URL。',
+        );
+        return;
+      }
       setLoading(true);
       setError(null);
       setCurrentResult(null);
@@ -155,7 +170,7 @@ export default function App(): JSX.Element {
       <main className="app-center">
         {/* Compact navigation shown only on small screens (<768px). */}
         <div className="app-mobile-nav">
-          <span className="app-mobile-brand">LawAgent</span>
+          <span className="app-mobile-brand">CrossComply</span>
           <div className="app-mobile-tabs">
             <button
               type="button"

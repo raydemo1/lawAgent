@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from 'react';
+import demoReview from '../data/demo-review.json';
 import type { ReviewApiResponse } from '../types/api';
 import { isReviewFailedResponse } from '../types/api';
 import {
@@ -29,6 +30,29 @@ import {
 const STORAGE_KEY = 'lawagent.cases.v1';
 const MAX_MATERIAL_CHARS = 8000;
 const STORE_EVENT = 'lawagent:cases-change';
+export const PUBLIC_DEMO_ENABLED =
+  import.meta.env.VITE_PUBLIC_DEMO === 'true';
+export const DEMO_CASE_ID = String(
+  (demoReview as ReviewApiResponse & { review_case_id?: string }).review_case_id ??
+    'crosscomply-demo-case',
+);
+
+const DEMO_CASE: SavedCase = {
+  id: DEMO_CASE_ID,
+  traceId: String(
+    (demoReview as ReviewApiResponse & { trace_id?: string }).trace_id ??
+      'crosscomply-demo-trace',
+  ),
+  savedAt: new Date().toISOString(),
+  question: '这个场景是否需要数据出境安全评估？',
+  materialText:
+    '我们计划将境内用户的手机号、精确定位和设备标识传输至新加坡云服务商，用于个性化推荐和算法优化，预计覆盖约120万名用户。',
+  materialSource: '内置真实示例',
+  response: demoReview as ReviewApiResponse,
+  feedback: null,
+  isBadCase: false,
+  badCaseReason: '',
+};
 
 // ---------------------------------------------------------------------------
 // Low-level storage access (pure, no React)
@@ -42,6 +66,7 @@ function readRaw(): SavedCase[] {
   if (!isBrowser()) return [];
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw === null) return PUBLIC_DEMO_ENABLED ? [DEMO_CASE] : [];
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];

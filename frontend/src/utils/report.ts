@@ -267,7 +267,7 @@ export function buildMarkdownReport(saved: SavedCase): string {
 
   lines.push('---');
   lines.push('');
-  lines.push('> 本报告由 LawAgent 自动生成，仅供研究参考，不构成正式法律意见。');
+  lines.push('> 本报告由 CrossComply 自动生成，仅供研究参考，不构成正式法律意见。');
 
   return lines.join('\n');
 }
@@ -437,7 +437,7 @@ export function buildHtmlReport(saved: SavedCase): string {
     parts.push(`<div>详情：${escHtml(response.message)}</div>`);
     parts.push(`<div>重试次数：${response.attempts}</div>`);
     parts.push('</div>');
-    parts.push('<footer>本报告由 LawAgent 自动生成，仅供研究参考，不构成正式法律意见。</footer>');
+    parts.push('<footer>本报告由 CrossComply 自动生成，仅供研究参考，不构成正式法律意见。</footer>');
     parts.push('</body></html>');
     return parts.join('\n');
   }
@@ -515,7 +515,7 @@ export function buildHtmlReport(saved: SavedCase): string {
     parts.push('</div>');
   }
 
-  parts.push('<footer>本报告由 LawAgent 自动生成，仅供研究参考，不构成正式法律意见。</footer>');
+  parts.push('<footer>本报告由 CrossComply 自动生成，仅供研究参考，不构成正式法律意见。</footer>');
   parts.push('</body></html>');
   return parts.join('\n');
 }
