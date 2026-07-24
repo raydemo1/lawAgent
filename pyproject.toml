@@ -1,7 +1,7 @@
 [project]
 name = "lawagent"
 version = "0.1.0"
-description = "Data governance and Agentic RAG foundation for LawAgent."
+description = "Cross-border data compliance Agentic RAG foundation for CrossComply."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

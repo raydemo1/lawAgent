@@ -1,4 +1,4 @@
-# LawAgent Resume Notes
+# CrossComply Resume Notes
 
 ## Recommended project bullets
 
