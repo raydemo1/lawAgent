@@ -2,6 +2,11 @@
 .superpowers/
 .agents/
 .codex/
+.impeccable/
+.playwright-cli/
+.zread/
+.github/hooks/
+.github/skills/
 /data/
 
 # Environment and secrets
